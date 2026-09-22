@@ -138,8 +138,15 @@ wait_for_bridge() {
 }
 
 find_client_window() {
+    local best=""
+    local best_score=-1
+    local geometry=""
+    local height=0
     local name
+    local score=0
+    local state=""
     local window
+    local width=0
 
     discover_bridge || return 1
     while read -r window; do
@@ -148,12 +155,30 @@ find_client_window() {
                 XAUTHORITY="$bridge_xauthority" \
                 /usr/bin/xdotool getwindowname "$window" 2>/dev/null || true
         )"
-        # Transient UU toasts share the title but are not managed windows.
-        if [[ "$name" == '网易UU远程' || "$name" == *UU* ]] &&
-           /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
-               /usr/bin/xprop -id "$window" WM_STATE 2>/dev/null | \
-               /usr/bin/grep -q 'WM_STATE(WM_STATE)'; then
-            printf '%s\n' "$window"
+        state="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xprop -id "$window" WM_STATE 2>/dev/null || true
+        )"
+        [[ "$state" == *'WM_STATE(WM_STATE)'* ]] || continue
+        geometry="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool getwindowgeometry "$window" 2>/dev/null || true
+        )"
+        [[ "$geometry" =~ Geometry:[[:space:]]*([0-9]+)x([0-9]+) ]] || continue
+        width="${BASH_REMATCH[1]}"
+        height="${BASH_REMATCH[2]}"
+        # Ignore toasts, DXGI helpers, and tiny GameViewer utility windows.
+        ((width >= 400 && height >= 300)) || continue
+        # Wine's real device-list window is named "winhome", not "UU Remote".
+        # The latter is often an iconified shell: mirroring it yields black.
+        score=100
+        [[ "$name" == winhome ]] && score=300
+        [[ "$state" == *'window state: Normal'* ]] && score=$((score + 50))
+        if ((score > best_score)); then
+            best="$window"
+            best_score="$score"
         fi
     done < <(
         /usr/bin/env DISPLAY="$bridge_display" \
@@ -161,6 +186,7 @@ find_client_window() {
             /usr/bin/xdotool search --class 'gameviewer.exe' 2>/dev/null ||
             true
     )
+    [[ -z "$best" ]] || printf '%s\n' "$best"
 }
 
 find_relay_window() {

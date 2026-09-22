@@ -10,14 +10,28 @@ SOURCE = (Path(__file__).resolve().parents[1] / "scripts/uu-remote-console").rea
 
 
 class ConsoleFocusTests(unittest.TestCase):
+    def test_local_window_keeps_bidirectional_input_on_loopback(self):
+        window = SOURCE.split("open_window() {", 1)[1].split("serve_console() {", 1)[0]
+        self.assertIn('-id "$client_window"', window)
+        self.assertIn('-listen 127.0.0.1', window)
+        self.assertIn('-localhost', window)
+        self.assertNotIn('-viewonly', window)
+        self.assertNotIn('-nomouse', window)
+        self.assertNotIn('-nokeyboard', window)
+
     def run_helpers(self, mode, commands):
         with tempfile.TemporaryDirectory(prefix="uu-focus-test-") as temp:
             directory = Path(temp)
             xdo = directory / "xdotool"
             xdo.write_text('''#!/usr/bin/env bash
 case "$*" in
-  *search*gameviewer*) printf '100\\n200\\n';;
-  *getwindowname*) printf 'UU Remote\\n';;
+  *search*gameviewer*) printf '100\\n200\\n300\\n';;
+  *getwindowname*100*) printf '网易UU远程\\n';;
+  *getwindowname*200*) printf 'winhome\\n';;
+  *getwindowname*300*) printf 'GameViewer\\n';;
+  *getwindowgeometry*100*) printf '  Geometry: 920x680\\n';;
+  *getwindowgeometry*200*) printf '  Geometry: 1536x904\\n';;
+  *getwindowgeometry*300*) printf '  Geometry: 96x136\\n';;
   *search*Ubuntu-Desktop-Relay*)
     [[ "$FOCUS_TEST_MODE" == rdp ]] || exit 1
     printf '101\\n';;
@@ -30,6 +44,8 @@ esac
             xprop = directory / "xprop"
             xprop.write_text('''#!/usr/bin/env bash
 if [[ "$*" == *100* ]]; then
+    printf 'WM_STATE(WM_STATE): window state: Iconic\\n'
+elif [[ "$*" == *200* || "$*" == *300* ]]; then
     printf 'WM_STATE(WM_STATE): window state: Normal\\n'
 else
     printf 'WM_STATE: not found.\\n'
@@ -58,8 +74,9 @@ fi
     def test_restores_native_vnc_and_filters_toast(self):
         result, calls, lease = self.run_helpers("vnc", "focus_client; release_client")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("windowmap 100 windowactivate --sync 100", calls)
-        self.assertNotIn("200", calls)
+        self.assertIn("windowmap 200 windowactivate --sync 200", calls)
+        self.assertNotIn("windowmap 100", calls)
+        self.assertNotIn("windowmap 300", calls)
         self.assertIn("windowactivate 202", calls)
         self.assertFalse(lease)
 
@@ -69,6 +86,11 @@ fi
         self.assertNotIn("windowactivate 101", calls)
         self.assertNotIn("windowactivate 202", calls)
         self.assertFalse(lease)
+
+    def test_selects_visible_device_list_over_iconified_uu_shell(self):
+        result, _, _ = self.run_helpers("none", "find_client_window")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "200")
 
 
 if __name__ == "__main__":

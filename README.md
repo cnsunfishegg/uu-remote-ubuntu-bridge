@@ -248,6 +248,14 @@ run:
 uu-remote open
 ```
 
+Choose the bridge-created **UU Remote** entry for both local account/device
+management and controlling another machine. A separate Wine-generated
+**UU远程** shortcut may point at a different prefix and bypass this bridge.
+The bridge service advertises this Ubuntu host in the background after the
+official UU account has been authenticated; merely opening the window is not
+proof that another device can connect. Check `uu-remote status` if it appears
+offline.
+
 This opens a native TigerVNC window containing only the installed Wine
 application. UU's client, host server, input broker, and
 `Ubuntu-Desktop-Relay` remain together on the private X display; a

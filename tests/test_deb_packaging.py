@@ -18,7 +18,7 @@ class DebianBundleTests(unittest.TestCase):
             bundle = root / "bundle"
             source = bundle / "source"
             source.mkdir(parents=True)
-            (bundle / "VERSION").write_text("0.3.0~rc1-1\n", encoding="ascii")
+            (bundle / "VERSION").write_text("0.3.0~rc2-1\n", encoding="ascii")
             marker = root / "marker"
             for filename, label in (("install.sh", "setup"), ("uninstall.sh", "remove")):
                 script = source / filename
@@ -48,7 +48,7 @@ class DebianBundleTests(unittest.TestCase):
                 ["bash", str(WRAPPER), "--help"], env=environment, check=True
             )
             self.assertEqual("setup:--help\n", marker.read_text(encoding="ascii"))
-            copied = root / "data" / "uu-remote-ubuntu-bridge-installer" / "0.3.0~rc1-1"
+            copied = root / "data" / "uu-remote-ubuntu-bridge-installer" / "0.3.0~rc2-1"
             self.assertTrue((copied / ".package-ready").is_file())
 
             subprocess.run(

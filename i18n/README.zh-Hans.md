@@ -70,6 +70,13 @@ uu-remote-bridge-setup
 安装依赖、下载并校验官方 UU 安装包，以及完成账号登录。该固定源码快照不支持
 依赖 Git 仓库的自动升级；详情见[Debian 包说明](../packaging/README.Debian)。
 
+安装后，在 Ubuntu 上无论是查看本机 UU 账号/设备状态，还是从本机控制其他电脑，
+都打开桥接器生成的英文 **UU Remote** 入口。Wine 自行生成的中文 **UU远程**
+快捷方式可能指向另一套 Wine 环境，不走本桥接器。让别人连接这台 Ubuntu
+不需要一直打开管理窗口：登录过官方 UU 账号后，桥接服务在后台运行。
+若对方看不到设备，先运行 `uu-remote status` 检查本机服务；在线与否仍需
+在另一台真实设备上确认。
+
 这个幂等安装脚本会安装依赖、校验上游文件、编译所有兼容组件、配置 GNOME
 Remote Desktop、把 RDP 密码保存到 GNOME Keyring，并启动用户级 systemd
 服务。重复运行不会破坏已有账户状态。

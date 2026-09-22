@@ -48,7 +48,10 @@ sed "s/@VERSION@/$version/g" "$repo_dir/packaging/control.in" \
     >"$stage/DEBIAN/control"
 chmod 0644 "$stage/DEBIAN/control"
 
-asset="$output_dir/${package_name}_${version}_amd64.deb"
+# GitHub release assets normalize '~' in filenames. Keep the Debian control
+# version intact, but use a portable filename for the downloadable artifact.
+asset_version="${version//\~/-}"
+asset="$output_dir/${package_name}_${asset_version}_amd64.deb"
 dpkg-deb --root-owner-group --build "$stage" "$asset"
 printf 'Built %s\n' "$asset"
 (

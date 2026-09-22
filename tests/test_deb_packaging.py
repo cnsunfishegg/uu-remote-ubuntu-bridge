@@ -65,6 +65,7 @@ class DebianBundleTests(unittest.TestCase):
         self.assertIn("Architecture: amd64", control)
         self.assertIn("Lachlan Chen", control)
         self.assertIn("git -C \"$repo_dir\" archive --format=tar HEAD", builder)
+        self.assertIn('asset_version="${version//\\~/-}"', builder)
         self.assertNotIn("postinst", builder)
         self.assertIn('if [[ "$skip_packages" == true ]]', installer)
         self.assertIn("install_winehq", installer)

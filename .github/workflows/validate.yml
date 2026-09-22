@@ -66,4 +66,4 @@ jobs:
         run: |
           version="$(<packaging/VERSION)"
           ./packaging/build-deb.sh "$version" "$RUNNER_TEMP/deb"
-          ./packaging/test-deb.sh "$RUNNER_TEMP/deb/uu-remote-ubuntu-bridge-installer_${version}_amd64.deb"
+          ./packaging/test-deb.sh "$RUNNER_TEMP/deb/uu-remote-ubuntu-bridge-installer_${version//\~/-}_amd64.deb"

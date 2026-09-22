@@ -7,7 +7,7 @@ This is a pre-release of the [public fork](https://github.com/cnsunfishegg/uu-re
 On an x86-64 Ubuntu 24.04 desktop (or an Ubuntu 26.04 test host), download the `.deb` below and run:
 
 ```bash
-sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0~rc1-1_amd64.deb
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc1-1_amd64.deb
 uu-remote-bridge-setup
 ```
 

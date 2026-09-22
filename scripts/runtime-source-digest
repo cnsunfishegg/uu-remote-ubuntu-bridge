@@ -8,6 +8,7 @@ cd "$repo_dir"
 runtime_files=(
     install.sh
     uninstall.sh
+    cmake/mingw-uurb-toolchain.cmake
     patches/libei-1.2.1-close-keymap-fd.patch
     scripts/build-compat.sh
     scripts/build-libei.sh
@@ -18,6 +19,7 @@ runtime_files=(
     scripts/inspect-wine-device-registry.py
     scripts/platform-support.sh
     scripts/runtime-settings.sh
+    scripts/select-installed-release-manifest
     scripts/runtime-source-digest
     scripts/stop-wine-prefix
     scripts/uu_connection_status.py

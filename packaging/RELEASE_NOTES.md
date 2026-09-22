@@ -1,52 +1,59 @@
-# v0.3.0-rc.3 — Ubuntu 26.04-first setup (experimental)
+# v0.3.0-rc.4 — repaired clean install for Ubuntu 26.04
 
-This fork targets x86-64 Ubuntu 26.04 GNOME. Ubuntu 24.04 remains supported
-as the upstream baseline. This is an unofficial, source-only installer bundle
-derived from [Lachlan Chen's UU Remote Ubuntu Bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge),
+RC4 supersedes RC3. RC3's first-time RDP setup referenced an upstream Jenkins
+artifact that has since been deleted, so a clean install could stop with HTTP
+404. RC4 builds the Windows SDL FreeRDP relay from a fixed source revision and
+hash-pinned, versioned SDL/MSYS2 dependencies instead.
+
+This fork primarily targets x86-64 Ubuntu 26.04 GNOME. It is an unofficial
+installer bundle derived from [Lachlan Chen's UU Remote Ubuntu Bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge),
 not a NetEase Linux application. The original MIT attribution is preserved.
 
 ## Install and open
 
-Download `uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb` below.
+Download `uu-remote-ubuntu-bridge-installer_0.3.0-rc4-1_amd64.deb` below.
 In the download directory, run:
 
 ```bash
-sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc4-1_amd64.deb
 ```
 
-Open **UU Remote Setup** from the Ubuntu app menu. Leave the terminal window
-open while it installs dependencies, downloads the hash-verified official UU
-Windows client, builds the bridge, and asks for your normal UU account sign-in.
-Setup asks for sudo when needed; do not run setup itself with sudo. After it
-finishes, the same app-menu entry becomes **UU Remote**. Use it to manage this
-Ubuntu host or control another computer; the host can run in the background.
-If the setup icon is missing, run `uu-remote-bridge-setup` from your logged-in
-GNOME desktop terminal. The checksum file is for optional download verification.
+Open **UU Remote Setup** from the Ubuntu app menu and leave the terminal window
+open. Setup installs dependencies, downloads and hash-checks the official UU
+Windows client, builds the bridge, and asks for normal UU account sign-in. Run
+setup as your normal desktop user, not with sudo. After setup, the same menu
+entry becomes **UU Remote**. The host can continue running in the background.
 
-## Changes since RC2
+## Changes since RC3
 
-- The controller viewer follows UU's active session as it resizes or enters
-  fullscreen and releases its local lock when closed, so it can be reopened.
-- The package now offers a setup launcher in the app menu; after setup it is
-  overridden by the single installed UU Remote entry instead of adding a
-  second permanent launcher. The quick start is 26.04-first.
-- First-time silent audio remains the default: system microphone and speakers
-  are not forwarded by this bridge's default configuration.
+- Clean RDP setup no longer depends on the deleted FreeRDP Jenkins download.
+  FreeRDP 3.31.1-dev0 is built from fixed commit `168925dac`; every downloaded
+  dependency and every installed relay runtime file is SHA-256 checked.
+- Fresh installs now default to the audited UU Remote `4.39.2.1561` release
+  used by the current 26.04 test machine. Rerunning setup preserves any exact
+  bundled, audited existing release instead of silently changing versions.
+- The controller viewer retains the RC3 fullscreen/resizing, close-and-reopen,
+  mouse, keyboard, and default audio-isolation fixes.
 
-## Limits
+## Acceptance evidence and limits
 
-The RC2 asset is not updated and still has the known black controller issue.
-This RC3 contains subsequent local fixes and automated controller-window,
-packaging, and unit checks. It is **not** a claim that every Windows, macOS,
-phone, display, input method, or audio configuration has passed two-device
-acceptance. Check remote video, mouse, keyboard, audio isolation, fullscreen,
-exit, and reconnect on your own machines before relying on it. Do not enable
-unattended startup by default. UU 4.41 is an isolated experiment, not the
-default: the bridge remains pinned to the audited UU 4.33 installer.
+The RC4 release gate includes a from-empty-directory dependency download and
+FreeRDP cross-build, checksum verification of the complete Windows runtime, an
+actual launch in a new Wine prefix, unit/controller checks, Debian package
+content checks, and setup from the extracted final `.deb` in an isolated home
+and prefix. The active 26.04 host installation remains on its already tested
+UU `4.39.2.1561` manifest and VNC path.
+
+This is still a prerelease, not a claim that every Windows, macOS, phone,
+display, input method, or audio configuration has passed two-device testing.
+Before relying on it, check remote video, mouse, keyboard, audio isolation,
+fullscreen, exit, and reconnect on your own machines. First-time silent audio
+remains the default. UU 4.41 is an isolated experiment, not the default.
 
 No NetEase binaries, Wine prefixes, credentials, private logs, or account data
-are in the .deb. Internet access, Ubuntu/WineHQ dependencies, and official UU
-sign-in are required during setup. The .deb is a fixed snapshot: Git-based
-automatic updates do not work. Removing it alone leaves per-user bridge state
-untouched; run `uu-remote-bridge-setup --uninstall` as the desktop user before
-removing the package if you want to undo the bridge configuration.
+are in the `.deb`. Internet access, Ubuntu/WineHQ dependencies, compilation
+time, and official UU sign-in are required during setup. The `.deb` is a fixed
+source snapshot, so Git-based automatic updates are unavailable. Removing the
+package alone leaves per-user bridge state untouched; run
+`uu-remote-bridge-setup --uninstall` as the desktop user first if you also want
+to undo the bridge configuration.

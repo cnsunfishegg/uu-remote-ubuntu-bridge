@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+installed_manifest="${1:?usage: select-installed-release-manifest INSTALLED CANDIDATE...}"
+shift
+
+for candidate in "$@"; do
+    if [[ -f "$candidate" ]] && /usr/bin/cmp -s \
+        "$installed_manifest" "$candidate"; then
+        /usr/bin/realpath "$candidate"
+        exit 0
+    fi
+done
+
+printf 'The installed UU release manifest is not an exact bundled, approved manifest.\n' >&2
+exit 1

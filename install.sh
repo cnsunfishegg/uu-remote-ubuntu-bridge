@@ -25,7 +25,7 @@ systemctl_user=(
 )
 uu_dir="$wine_prefix/drive_c/Program Files/Netease/GameViewer"
 uu_bin="$uu_dir/bin"
-release_manifest="${UURB_RELEASE_MANIFEST:-$repo_dir/patches/uu-remote-4.33.0.8907.json}"
+release_manifest="${UURB_RELEASE_MANIFEST:-$repo_dir/patches/uu-remote-4.39.2.1561.json}"
 experimental_release_manifest="$repo_dir/experiments/uu-remote-4.41.1.2335.json"
 experimental_wine_prefix="${UURB_EXPERIMENTAL_WINE_PREFIX:-$HOME/.local/share/wineprefixes/uu-remote-4.41-experimental}"
 installed_manifest="$wine_prefix/compat/release-manifest.json"
@@ -532,6 +532,19 @@ if [[ "$experimental_441" == true ]]; then
     release_manifest="$experimental_release_manifest"
     manifest_tool_flags=(--allow-experimental)
 fi
+if [[ "$experimental_441" == false &&
+      "$release_manifest_explicit" == false &&
+      -z "${UURB_RELEASE_MANIFEST:-}" &&
+      -f "$uu_dir/GameViewer.exe" ]]; then
+    if [[ ! -f "$installed_manifest" ]]; then
+        printf 'The existing UU installation has no release manifest; refusing to guess its version.\n' >&2
+        exit 1
+    fi
+    release_manifest="$(
+        "$repo_dir/scripts/select-installed-release-manifest" \
+            "$installed_manifest" "$repo_dir"/patches/uu-remote-*.json
+    )"
+fi
 if [[ "$experimental_441" == false && "$desktop_relay" == rdp ]]; then
     windows_rdp_runtime=true
 fi
@@ -592,7 +605,7 @@ install_packages() {
     sudo apt-get install -y \
         acl aria2 binutils ca-certificates cmake crudini curl freerdp3-x11 \
         gcc \
-        gcc-mingw-w64-x86-64 \
+        gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
         git gnome-remote-desktop gpg iproute2 jq libsecret-tools libx11-6 \
         libxml2-utils libxtst6 meson novnc \
         ninja-build openbox openssl p7zip-full patch python3 python3-attr \
@@ -869,6 +882,8 @@ install -m 0755 "$compat_build/winlogon.exe.so" \
 if [[ "$windows_rdp_runtime" == true ]]; then
     install -m 0755 "$freerdp_build/"*.dll "$freerdp_build/sdl-freerdp.exe" \
         "$freerdp_install/"
+    install -m 0644 "$freerdp_build/.build-sha256" \
+        "$freerdp_install/.build-sha256"
     install -m 0755 "$compat_build/winpr-sspi-shim.dll" \
         "$freerdp_install/winpr-sspi-shim.dll"
 fi

@@ -744,6 +744,37 @@ terminal_bridge_pid=
         self.assertIn(".runtime-source-sha256", installer)
         self.assertIn("installed runtime matches this source checkout", verifier)
 
+    def test_setup_preserves_an_exact_audited_installed_release(self):
+        selector = REPOSITORY / "scripts" / "select-installed-release-manifest"
+        installer = (REPOSITORY / "install.sh").read_text()
+        digest = (REPOSITORY / "scripts" / "runtime-source-digest").read_text()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            approved = root / "approved.json"
+            approved.write_text('{"version":"4.39.2.1561"}\n', encoding="utf-8")
+            installed = root / "installed.json"
+            shutil.copyfile(approved, installed)
+            selected = subprocess.run(
+                [str(selector), str(installed), str(approved)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(str(approved.resolve()), selected.stdout.strip())
+
+            installed.write_text('{"version":"unknown"}\n', encoding="utf-8")
+            rejected = subprocess.run(
+                [str(selector), str(installed), str(approved)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertIn("refusing to guess", installer)
+
+        self.assertIn("uu-remote-4.39.2.1561.json", installer)
+        self.assertIn("select-installed-release-manifest", digest)
+
     def test_verifier_cannot_confuse_xrdp_with_gnome_rdp(self):
         verifier = (REPOSITORY / "scripts" / "verify.sh").read_text()
         self.assertIn("/usr/bin/gsettings", verifier)
@@ -818,15 +849,22 @@ terminal_bridge_pid=
         self.assertIn(".build-recipe", builder)
         self.assertIn("sha256sum -c .build-sha256", builder)
 
-    def test_freerdp_runtime_uses_the_retained_matching_revision(self):
+    def test_freerdp_runtime_builds_from_retained_versioned_sources(self):
         builder = (REPOSITORY / "scripts" / "build-winpr.sh").read_text()
         verifier = (REPOSITORY / "scripts" / "verify.sh").read_text()
 
         self.assertIn("168925dac792142f6d0b66e7e2d568a3d439521c", builder)
-        self.assertIn("/2064/artifact/install/bin/sdl-freerdp.exe", builder)
-        expected = "b384347b6d0dd1e0c9912d18f5993b4e30643470e2a627e112debb34e8710762"
-        self.assertIn(expected, builder)
-        self.assertIn(expected, verifier)
+        self.assertIn("SDL3-devel-3.4.16-mingw.tar.gz", builder)
+        self.assertIn("SDL3_ttf-devel-3.2.2-mingw.tar.gz", builder)
+        self.assertIn("sdl3-freerdp", builder)
+        self.assertNotIn("ci.freerdp.com", builder)
+        self.assertIn("mingw-uurb-toolchain.cmake", builder)
+        self.assertIn(".build-sha256", verifier)
+        self.assertIn("source-built Windows FreeRDP SDL runtime", verifier)
+
+        installer = (REPOSITORY / "install.sh").read_text()
+        self.assertIn('"$freerdp_install/.build-sha256"', installer)
+        self.assertIn('"$freerdp_install/ossl-modules/legacy.dll"', installer)
 
     def test_winpr_shim_uses_numeric_package_identity(self):
         shim = (REPOSITORY / "src" / "winpr_sspi_shim.c").read_text()

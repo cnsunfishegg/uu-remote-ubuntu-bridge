@@ -17,7 +17,7 @@ saved_wine_bin="$(saved_setting UURB_WINE_BIN)"
 wine_prefix="${WINEPREFIX:-${saved_wine_prefix:-$HOME/.local/share/wineprefixes/uu-remote}}"
 release_manifest="${UURB_RELEASE_MANIFEST:-$wine_prefix/compat/release-manifest.json}"
 if [[ ! -f "$release_manifest" ]]; then
-    release_manifest="$repo_dir/patches/uu-remote-4.33.0.8907.json"
+    release_manifest="$repo_dir/patches/uu-remote-4.39.2.1561.json"
 fi
 manifest_field() {
     /usr/bin/python3 "$repo_dir/scripts/patch-gameviewer.py" field "$1" \
@@ -41,6 +41,7 @@ case "$release_version" in
         ;;
 esac
 freerdp="$wine_prefix/drive_c/Program Files/FreeRDP/sdl-freerdp.exe"
+freerdp_dir="${freerdp%/*}"
 cursor_guard="$wine_prefix/compat/uu-cursor-guard.dll"
 cursor_guard_log="$wine_prefix/drive_c/users/$bridge_user/Temp/uu-cursor-guard.log"
 cursor_reader_guard_log="$wine_prefix/drive_c/users/$bridge_user/AppData/Local/Temp/uu-cursor-guard.log"
@@ -501,9 +502,9 @@ fi
 if [[ "$desktop_relay" == vnc ]]; then
     printf 'INFO  FreeRDP is not used by the configured VNC relay\n'
 elif [[ -f "$freerdp" ]] && \
-   [[ "$(sha256sum "$freerdp" | awk '{print $1}')" == \
-      b384347b6d0dd1e0c9912d18f5993b4e30643470e2a627e112debb34e8710762 ]]; then
-    pass 'pinned Windows FreeRDP SDL client is installed'
+   [[ -f "$freerdp_dir/.build-sha256" ]] && \
+   (cd "$freerdp_dir" && sha256sum -c .build-sha256 >/dev/null 2>&1); then
+    pass 'source-built Windows FreeRDP SDL runtime matches its install manifest'
 else
     fail 'Windows FreeRDP SDL client verification failed'
 fi

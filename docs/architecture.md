@@ -143,18 +143,19 @@ and pins the SHA-256 fingerprint of GNOME's configured TLS certificate.
 
 ### FreeRDP SSPI compatibility
 
-The Jenkins Windows SDL client uses WinPR's SSPI ABI. Wine's native SSPI and
-WinPR disagree about the private handle-name representation during NLA. The
-small `winpr-sspi-shim.dll` forwards to `InitSecurityInterfaceExA/W` from
-`libwinpr3.dll` and normalizes those handles before and after credential and
-context operations.
+The Windows SDL client and WinPR are built from the same fixed FreeRDP source
+revision. Wine's native SSPI and WinPR disagree about the private handle-name
+representation during NLA. The small `winpr-sspi-shim.dll` forwards to
+`InitSecurityInterfaceExA/W` from `libwinpr3.dll` and normalizes those handles
+before and after credential and context operations.
 
 ### UU direct-input patch
 
 Windows UU normally prefers its signed `gvinput.sys` HID driver. That driver
-cannot load under Wine. Four validated instruction edits force UU's existing
-user-mode `SendInput` path instead. The patch is limited to 4.33.0.8907 and is
-described in `reverse-engineering.md`.
+cannot load under Wine. Validated instruction edits force UU's existing
+user-mode `SendInput` path instead. Every approved UU release uses its own
+reviewed manifest, hashes, and landmarks; unknown binaries are rejected. The
+method is described in `reverse-engineering.md`.
 
 ### Input broker
 

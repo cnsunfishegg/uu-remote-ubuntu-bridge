@@ -1,0 +1,11 @@
+set(CMAKE_SYSTEM_NAME Windows)
+
+set(CMAKE_C_COMPILER /usr/bin/x86_64-w64-mingw32-gcc-win32 CACHE FILEPATH "")
+set(CMAKE_CXX_COMPILER /usr/bin/x86_64-w64-mingw32-g++-win32 CACHE FILEPATH "")
+set(CMAKE_RC_COMPILER /usr/bin/x86_64-w64-mingw32-windres CACHE FILEPATH "")
+set(CMAKE_AR /usr/bin/x86_64-w64-mingw32-ar CACHE FILEPATH "")
+set(CMAKE_RANLIB /usr/bin/x86_64-w64-mingw32-ranlib CACHE FILEPATH "")
+set(CMAKE_C_COMPILER_AR /usr/bin/x86_64-w64-mingw32-gcc-ar-win32 CACHE FILEPATH "" FORCE)
+set(CMAKE_C_COMPILER_RANLIB /usr/bin/x86_64-w64-mingw32-gcc-ranlib-win32 CACHE FILEPATH "" FORCE)
+set(CMAKE_CXX_COMPILER_AR /usr/bin/x86_64-w64-mingw32-gcc-ar-win32 CACHE FILEPATH "" FORCE)
+set(CMAKE_CXX_COMPILER_RANLIB /usr/bin/x86_64-w64-mingw32-gcc-ranlib-win32 CACHE FILEPATH "" FORCE)

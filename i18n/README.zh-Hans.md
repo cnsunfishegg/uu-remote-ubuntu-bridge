@@ -31,9 +31,10 @@
 RDP 中继呈现真实的 GNOME Wayland 会话。画面、鼠标、键盘、重新连接和服务
 自动恢复均已验证。
 
-当前版本有意锁定为 UU 远程 `4.33.0.8907`；上游 24.04 / GNOME 46
-路径保留，本分支主要针对 Ubuntu 26.04 / GNOME 50。任何未知二进制文件
-都会被拒绝，绝不会直接套用旧补丁。
+全新安装默认使用已审计的 UU 远程 `4.39.2.1561`；重新运行设置时，会通过
+完整清单匹配保留已有的已审计版本，不会自动降级或升级。上游 24.04 / GNOME 46
+路径保留，本分支主要针对 Ubuntu 26.04 / GNOME 50。任何未知二进制文件都会
+被拒绝，绝不会直接套用旧补丁。
 
 此 fork 以 Ubuntu 26.04 / GNOME 50 为主要目标：它会使用并
 验证系统的新版 `libei`，不会把 24.04 的旧兼容库载入 GNOME 50。它尚未完成与
@@ -60,7 +61,7 @@ UU 只从网易官方域名 [uuyc.163.com](https://uuyc.163.com/) 下载。官�
 下载 `amd64` 的 `.deb`。Ubuntu 24.04 也保留支持。打开下载目录中的终端，执行：
 
 ```bash
-sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc4-1_amd64.deb
 ```
 
 然后从应用菜单打开 **UU Remote 设置**，保持弹出的终端窗口开启，按提示完成

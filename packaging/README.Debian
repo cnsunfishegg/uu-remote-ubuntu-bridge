@@ -9,7 +9,7 @@ MIT license and attribution are included.
 This fork primarily targets x86-64 Ubuntu 26.04 GNOME. Ubuntu 24.04 remains
 supported as the upstream baseline. In the download directory, run:
 
-    sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
+    sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc4-1_amd64.deb
 
 Then open "UU Remote Setup" from the app menu and keep its terminal window
 open until setup finishes. The same menu slot becomes "UU Remote" after setup.
@@ -42,6 +42,12 @@ untouched. The 26.04 controller path and UU 4.41 remain experimental; do not
 treat the package as a broadly validated compatibility claim. Upgrading the
 .deb does not automatically rerun setup: run `uu-remote-bridge-setup` again
 from a logged-in desktop terminal after an upgrade.
+
+Fresh setup defaults to the audited UU Remote 4.39.2.1561 manifest. If setup
+finds an existing installation whose saved manifest exactly matches another
+bundled audited release, it preserves that release. The Windows SDL FreeRDP
+relay is built during setup from a fixed source revision and hash-pinned
+versioned dependencies; allow several minutes for the first build.
 
 Source and issue tracker: https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge
 Original project: https://github.com/lachlanchen/uu-remote-ubuntu-bridge

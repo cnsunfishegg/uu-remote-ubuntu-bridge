@@ -10,7 +10,7 @@
 
 [![Ubuntu 26.04 target](https://img.shields.io/badge/Ubuntu-26.04%20target-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
 [![GNOME 50 target](https://img.shields.io/badge/GNOME-50%20target-4A86CF?logo=gnome&logoColor=white)](https://www.gnome.org/)
-[![UU Remote](https://img.shields.io/badge/UU_Remote-4.33.0.8907-00A870)](https://uuyc.163.com/)
+[![UU Remote](https://img.shields.io/badge/UU_Remote-4.39.2.1561-00A870)](https://uuyc.163.com/)
 [![Wine 11](https://img.shields.io/badge/Wine-11.0-800000?logo=wine&logoColor=white)](https://www.winehq.org/)
 [![Patch policy](https://img.shields.io/badge/Patches-fail--closed-1F883D)](docs/security.md)
 [![License MIT](https://img.shields.io/badge/License-MIT-2F81F7)](LICENSE)
@@ -52,7 +52,8 @@ local RDP relay, and makes mouse and keyboard control work normally.
 | Authentication | Normal UU sign-in and separate GNOME RDP credential |
 
 > This is not a native UU Linux port and is not affiliated with NetEase. The
-> current manifest is intentionally locked to UU Remote `4.33.0.8907`.
+> New installations use the audited UU Remote `4.39.2.1561` manifest. Rerunning
+> setup preserves an existing bundled, audited version by exact manifest match.
 
 Download UU only from NetEase's official [uuyc.163.com](https://uuyc.163.com/)
 domain. Its current product page does not list a Linux host; this bridge uses
@@ -116,7 +117,7 @@ For this fork, use an x86-64 Ubuntu 26.04 GNOME desktop with internet access
 and install it from the folder where it was downloaded:
 
 ```bash
-sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc4-1_amd64.deb
 ```
 
 Then open **UU Remote Setup** from the app menu. It runs as your logged-in

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+umask 077
+
+package_root="${UURB_PACKAGE_ROOT:-/usr/share/uu-remote-ubuntu-bridge-installer}"
+source_root="$package_root/source"
+version_file="$package_root/VERSION"
+
+if ((EUID == 0)); then
+    printf 'Run setup as the logged-in desktop user, not with sudo.\n' >&2
+    exit 1
+fi
+if [[ ! -r "$version_file" || ! -x "$source_root/install.sh" ]]; then
+    printf 'The UU Remote Bridge installer bundle is incomplete. Reinstall the .deb.\n' >&2
+    exit 1
+fi
+version="$(<"$version_file")"
+if [[ ! "$version" =~ ^[0-9][A-Za-z0-9.+:~\-]*$ ]]; then
+    printf 'The package version is invalid.\n' >&2
+    exit 1
+fi
+user_data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
+if [[ "$user_data_root" != /* ]]; then
+    printf 'XDG_DATA_HOME must be an absolute path.\n' >&2
+    exit 1
+fi
+user_source_root="$user_data_root/uu-remote-ubuntu-bridge-installer"
+target="$user_source_root/$version"
+mkdir -p "$user_source_root"
+chmod 0700 "$user_source_root"
+exec 9>"$user_source_root/.setup.lock"
+flock 9
+if [[ ! -f "$target/.package-ready" ]]; then
+    if [[ -e "$target" ]]; then
+        printf 'An incomplete source directory already exists: %s\n' "$target" >&2
+        exit 1
+    fi
+    temporary="$(mktemp -d "$user_source_root/.source.XXXXXXXX")"
+    cleanup() { rm -r -- "$temporary"; }
+    trap cleanup EXIT
+    cp -a "$source_root/." "$temporary/"
+    printf '%s\n' "$version" >"$temporary/.package-ready"
+    mv -T -- "$temporary" "$target"
+    trap - EXIT
+fi
+flock -u 9
+exec 9>&-
+
+cd "$target"
+if [[ "${1:-}" == --uninstall ]]; then
+    shift
+    exec ./uninstall.sh "$@"
+fi
+for argument in "$@"; do
+    if [[ "$argument" == --automatic-updates ]]; then
+        printf 'Automatic updates require a Git checkout; this .deb is a fixed source snapshot.\n' >&2
+        exit 2
+    fi
+done
+exec ./install.sh "$@"

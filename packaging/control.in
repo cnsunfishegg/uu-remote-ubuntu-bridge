@@ -1,0 +1,14 @@
+Package: uu-remote-ubuntu-bridge-installer
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: cnsunfishegg <297799715+cnsunfishegg@users.noreply.github.com>
+Depends: bash, python3, ca-certificates, util-linux
+Homepage: https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge
+Description: experimental UU Remote Ubuntu Bridge setup bundle
+ This package installs a source-only setup command for the unofficial fork of
+ Lachlan Chen's UU Remote Ubuntu Bridge. Run uu-remote-bridge-setup as a logged-in
+ desktop user after installing the package. Setup downloads the official UU
+ installer separately and requires network access and account sign-in.
+ No proprietary NetEase binaries or user account data are bundled.

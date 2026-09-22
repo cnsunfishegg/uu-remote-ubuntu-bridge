@@ -57,6 +57,19 @@ UU 只从网易官方域名 [uuyc.163.com](https://uuyc.163.com/) 下载。官�
 ./install.sh
 ```
 
+此 Fork 的 [实验性 Release](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge/releases)
+也提供 `amd64` 的 `.deb` **安装器包**。它只包含桥接器源码，不包含网易程序，也不
+代表装完包就能直接远控。下载后依次执行：
+
+```bash
+sudo apt install ./uu-remote-ubuntu-bridge-installer_*.deb
+uu-remote-bridge-setup
+```
+
+第二条命令要在已登录的 GNOME 桌面以普通用户运行，不能加 `sudo`；它仍需联网
+安装依赖、下载并校验官方 UU 安装包，以及完成账号登录。该固定源码快照不支持
+依赖 Git 仓库的自动升级；详情见[Debian 包说明](../packaging/README.Debian)。
+
 这个幂等安装脚本会安装依赖、校验上游文件、编译所有兼容组件、配置 GNOME
 Remote Desktop、把 RDP 密码保存到 GNOME Keyring，并启动用户级 systemd
 服务。重复运行不会破坏已有账户状态。

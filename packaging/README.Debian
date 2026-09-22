@@ -1,0 +1,31 @@
+UU Remote Ubuntu Bridge installer package (experimental fork)
+=============================================================
+
+This is a source/installer bundle, not a ready-to-use UU Linux host. The original
+Wine/Xvfb, RDP/VNC, input-broker, and maintenance architecture is by Lachlan
+Chen; this fork contains work-in-progress host-specific changes. The original
+MIT license and attribution are included.
+
+Install on x86-64 Ubuntu 24.04, or test the Ubuntu 26.04 preview:
+
+    sudo apt install ./uu-remote-ubuntu-bridge-installer_*.deb
+    uu-remote-bridge-setup
+
+Run the second command as the logged-in desktop user, not with sudo. It copies
+the reviewed source to a versioned user-writable directory before building;
+the .deb installation itself does not download software, alter the desktop,
+configure unattended access, or log into UU. The setup command may request
+sudo for Ubuntu/WineHQ dependencies, downloads the hash-verified official UU
+installer, and asks for normal UU account sign-in. It does not include or
+redistribute NetEase's proprietary programs.
+
+The bundled source is a release snapshot, not a Git checkout. The project's
+Git-based automatic updater/upgrade workflow is not supported from this .deb;
+use a real source checkout for that workflow. To undo the bridge before
+removing the package, run `uu-remote-bridge-setup --uninstall` as the desktop
+user. Removing the Debian package alone deliberately leaves per-user UU state
+untouched. Ubuntu 26.04 and UU 4.41 remain experimental and require separate
+acceptance checks; do not treat the package as a stable compatibility claim.
+
+Source and issue tracker: https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge
+Original project: https://github.com/lachlanchen/uu-remote-ubuntu-bridge

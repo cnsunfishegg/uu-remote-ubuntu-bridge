@@ -338,9 +338,15 @@ if [[ $EUID -eq 0 ]]; then
     exit 1
 fi
 if [[ "$wine_prefix" != /* || "$wine_bin" != /* ||
-      "$wineserver_bin" != /* || ! -x "$wine_bin" ||
-      ! -x "$wineserver_bin" ]]; then
-    printf 'Wine prefix, wine, and wineserver must be existing absolute paths.\n' >&2
+      "$wineserver_bin" != /* ]]; then
+    printf 'Wine prefix, wine, and wineserver must use absolute paths.\n' >&2
+    exit 2
+fi
+# A fresh host may not have Wine yet: install_packages provisions the default
+# WineHQ runtime below. --skip-packages must fail before touching the prefix.
+if [[ "$skip_packages" == true ]] &&
+   { [[ ! -x "$wine_bin" ]] || [[ ! -x "$wineserver_bin" ]]; }; then
+    printf 'Wine is unavailable; install it first or omit --skip-packages.\n' >&2
     exit 2
 fi
 if [[ "$(uname -m)" != x86_64 ]]; then

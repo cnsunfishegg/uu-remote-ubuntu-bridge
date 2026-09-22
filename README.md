@@ -114,6 +114,16 @@ Run from the logged-in Ubuntu GNOME desktop session:
 ./install.sh
 ```
 
+The [fork's experimental Release](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge/releases)
+also provides an `amd64` Debian **installer bundle**. It contains the tracked
+bridge source, not a ready-to-use UU host or any NetEase executable. Install
+the `.deb` with `sudo apt install ./uu-remote-ubuntu-bridge-installer_*.deb`,
+then run `uu-remote-bridge-setup` **without sudo** from the logged-in GNOME
+desktop. This runs the same installer from a private user-writable source
+snapshot and still needs network access, Ubuntu/WineHQ dependencies, and
+official UU account sign-in. The Git-based automatic updater is unavailable
+from this snapshot; see [Debian package notes](packaging/README.Debian).
+
 The one installer:
 
 1. installs Ubuntu, WineHQ, build, X11, RDP, and keyring dependencies

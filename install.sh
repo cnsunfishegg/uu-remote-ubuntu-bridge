@@ -598,7 +598,7 @@ install_packages() {
         ninja-build openbox openssl p7zip-full patch python3 python3-attr \
         python3-gi python3-jinja2 tar tigervnc-viewer websockify \
         x11-utils x11vnc xauth xclip \
-        xdotool xvfb zstd
+        xdotool xvfb wmctrl zstd
     install_winehq
 }
 
@@ -660,7 +660,7 @@ for command in curl meson ninja patch readelf sha256sum /usr/bin/systemctl \
     /usr/bin/awk /usr/bin/ip /usr/bin/mcookie /usr/bin/openbox \
     /usr/bin/script /usr/bin/sort /usr/bin/ss /usr/bin/xauth \
     /usr/bin/vncviewer /usr/bin/websockify /usr/bin/x11vnc /usr/bin/xclip \
-    /usr/bin/xdotool \
+    /usr/bin/xdotool /usr/bin/wmctrl \
     /usr/libexec/gnome-remote-desktop-daemon; do
     if ! command -v "$command" >/dev/null 2>&1; then
         printf 'missing required command: %s\n' "$command" >&2
@@ -1050,13 +1050,9 @@ PY
 chmod 0644 "$desktop_entry" "$controller_entry"
 if [[ -d "$HOME/Desktop" ]]; then
     desktop_shortcut="$HOME/Desktop/UU Remote.desktop"
-    controller_shortcut="$HOME/Desktop/UU Remote Controller.desktop"
     install -m 0755 "$desktop_entry" "$desktop_shortcut"
-    install -m 0755 "$controller_entry" "$controller_shortcut"
     if command -v gio >/dev/null 2>&1; then
         gio set "$desktop_shortcut" metadata::trusted true \
-            >/dev/null 2>&1 || true
-        gio set "$controller_shortcut" metadata::trusted true \
             >/dev/null 2>&1 || true
     fi
 fi
@@ -1129,6 +1125,42 @@ if [[ "$fresh_install" == true && "$skip_account_login" == false ]]; then
     (cd "$uu_dir" && "$wine_bin" GameViewer.exe) || true
     stop_wine_prefix
 fi
+
+# Keep one obvious desktop entry. Archive only shortcuts known to launch this
+# bridge's Wine client directly, plus our own previous Controller shortcut.
+shortcut_archive=""
+archive_duplicate_shortcut() {
+    local shortcut="$1"
+    local destination=""
+
+    [[ -f "$shortcut" ]] || return 0
+    if [[ -z "$shortcut_archive" ]]; then
+        install -d -m 0700 "$HOME/.local/share/uu-remote-bridge/old-shortcuts"
+        shortcut_archive="$(mktemp -d \
+            "$HOME/.local/share/uu-remote-bridge/old-shortcuts/set-XXXXXX")"
+    fi
+    destination="$shortcut_archive/$(basename "$shortcut")"
+    if [[ -e "$destination" ]]; then
+        destination="$shortcut_archive/menu-$(basename "$shortcut")"
+    fi
+    mv -- "$shortcut" "$destination"
+}
+old_controller_shortcut="$HOME/Desktop/UU Remote Controller.desktop"
+if [[ -f "$old_controller_shortcut" ]] &&
+   /usr/bin/grep -Fxq \
+       "Exec=$HOME/.local/bin/uu-remote control" "$old_controller_shortcut"; then
+    archive_duplicate_shortcut "$old_controller_shortcut"
+fi
+for shortcut in \
+    "$HOME/Desktop/UU远程.desktop" \
+    "$HOME/.local/share/applications/wine/Programs/UU远程.desktop"; do
+    if [[ -f "$shortcut" ]] &&
+       /usr/bin/grep -Fq "WINEPREFIX=$wine_prefix" "$shortcut" &&
+       { /usr/bin/grep -Fq 'GameViewer.exe' "$shortcut" ||
+         /usr/bin/grep -Fq 'UU远程.lnk' "$shortcut"; }; then
+        archive_duplicate_shortcut "$shortcut"
+    fi
+done
 
 if [[ "$start_service" == true ]]; then
     "${systemctl_user[@]}" restart uu-remote-bridge.service

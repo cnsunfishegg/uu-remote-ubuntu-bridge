@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -19,6 +20,10 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertNotIn('-viewonly', window)
         self.assertNotIn('-nomouse', window)
         self.assertNotIn('-nokeyboard', window)
+        self.assertIn('monitor_client_window "$client_window" &', window)
+        self.assertIn('X11VNC_REMOTE=$window_remote_channel', window)
+        self.assertIn('stop_window_child "$window_vnc_pid"', SOURCE)
+        self.assertIn('/usr/bin/flock -w 4 9', window)
 
     def run_helpers(self, mode, commands):
         with tempfile.TemporaryDirectory(prefix="uu-focus-test-") as temp:
@@ -27,9 +32,12 @@ class ConsoleFocusTests(unittest.TestCase):
             xdo.write_text('''#!/usr/bin/env bash
 case "$*" in
   *search*gameviewer*) printf '100\\n200\\n300\\n';;
+  *getactivewindow*)
+    [[ "$FOCUS_TEST_MODE" == active_small ]] && printf '100\\n';;
   *getwindowname*100*) printf '网易UU远程\\n';;
   *getwindowname*200*) printf 'Remote session\\n';;
   *getwindowname*300*) printf 'GameViewer\\n';;
+  *getwindowname*202*) printf 'UU Remote - TigerVNC\\n';;
   *getwindowgeometry*100*) printf '  Geometry: 920x680\\n';;
   *getwindowgeometry*200*) printf '  Geometry: 1536x904\\n';;
   *getwindowgeometry*300*) printf '  Geometry: 96x136\\n';;
@@ -44,23 +52,31 @@ esac
 ''')
             xprop = directory / "xprop"
             xprop.write_text('''#!/usr/bin/env bash
-if [[ "$*" == *100* ]]; then
+if [[ "$*" == *100* && "$FOCUS_TEST_MODE" != active_small ]]; then
     printf 'WM_STATE(WM_STATE): window state: Iconic\\n'
-elif [[ "$*" == *200* || "$*" == *300* ]]; then
+elif [[ "$*" == *200* || "$*" == *300* ||
+        ( "$*" == *100* && "$FOCUS_TEST_MODE" == active_small ) ]]; then
     printf 'WM_STATE(WM_STATE): window state: Normal\\n'
 else
     printf 'WM_STATE: not found.\\n'
 fi
 ''')
+            wmctrl = directory / "wmctrl"
+            wmctrl.write_text('''#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG"
+''')
             xdo.chmod(0o700)
             xprop.chmod(0o700)
+            wmctrl.chmod(0o700)
             # Source only definitions, substitute private fake X executables,
             # and override discovery so the real X server is never used.
             script = SOURCE.split('case "${1:-open}" in', 1)[0]
-            script = script.replace("/usr/bin/xdotool", str(xdo)).replace("/usr/bin/xprop", str(xprop))
+            script = (script.replace("/usr/bin/xdotool", str(xdo))
+                            .replace("/usr/bin/xprop", str(xprop))
+                            .replace("/usr/bin/wmctrl", str(wmctrl)))
             script += '\ndiscover_bridge() { bridge_display=:99; bridge_xauthority=/none; }\n'
             script += commands
-            env = dict(os.environ, HOME=temp, XDG_RUNTIME_DIR=temp, XDG_STATE_HOME=temp,
+            env = dict(os.environ, HOME=temp, DISPLAY=":99", XDG_RUNTIME_DIR=temp, XDG_STATE_HOME=temp,
                        FOCUS_TEST_MODE=mode, FOCUS_TEST_LOG=str(directory / "calls"))
             result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
             calls = (directory / "calls").read_text() if (directory / "calls").exists() else ""
@@ -88,10 +104,36 @@ fi
         self.assertNotIn("windowactivate 202", calls)
         self.assertFalse(lease)
 
-    def test_selects_visible_device_list_over_iconified_uu_shell(self):
+    def test_selects_visible_large_window_over_iconified_shell(self):
         result, _, _ = self.run_helpers("none", "find_client_window")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "200")
+
+    def test_selects_active_session_window_over_larger_background_window(self):
+        result, _, _ = self.run_helpers("active_small", "find_client_window")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "100")
+
+    def test_stuck_viewer_child_does_not_hold_window_lock_forever(self):
+        started = time.monotonic()
+        result, _, _ = self.run_helpers(
+            "none",
+            """python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)' &
+stuck=$!
+sleep 0.2
+stop_window_child "$stuck"
+if kill -0 "$stuck" 2>/dev/null; then exit 1; fi
+""",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(time.monotonic() - started, 4)
+
+    def test_fullscreen_state_targets_only_the_local_uu_viewer(self):
+        result, calls, _ = self.run_helpers(
+            "vnc", "set_local_viewer_fullscreen add"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("-ir 0xca -b add,fullscreen", calls)
 
 
 if __name__ == "__main__":

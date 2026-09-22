@@ -7,6 +7,7 @@ Comment=Control another computer; this Ubuntu host pauses until the controller c
 Exec=@EXEC@
 Icon=024B_GameViewer.0
 Terminal=false
+NoDisplay=true
 Categories=Network;RemoteAccess;
 StartupNotify=true
 Keywords=UU;Remote;Controller;

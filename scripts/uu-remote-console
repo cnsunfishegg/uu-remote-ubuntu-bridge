@@ -40,6 +40,8 @@ bridge_xauthority=""
 vnc_pid=""
 websockify_pid=""
 window_vnc_pid=""
+window_monitor_pid=""
+window_remote_channel=""
 relay_focus_pid=""
 
 notify_error() {
@@ -138,6 +140,7 @@ wait_for_bridge() {
 }
 
 find_client_window() {
+    local active=""
     local best=""
     local best_score=-1
     local geometry=""
@@ -148,6 +151,11 @@ find_client_window() {
     local width=0
 
     discover_bridge || return 1
+    active="$(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool getactivewindow 2>/dev/null || true
+    )"
     while read -r window; do
         state="$(
             /usr/bin/env DISPLAY="$bridge_display" \
@@ -170,6 +178,8 @@ find_client_window() {
         score=$((width * height))
         [[ "$state" == *'window state: Normal'* ]] &&
             score=$((score + 2000000))
+        [[ "$window" == "$active" ]] &&
+            score=$((score + 10000000))
         if ((score > best_score)); then
             best="$window"
             best_score="$score"
@@ -267,12 +277,107 @@ cleanup_server() {
 
 cleanup_window() {
     trap - EXIT INT TERM HUP
-    if [[ -n "$window_vnc_pid" ]]; then
-        kill "$window_vnc_pid" >/dev/null 2>&1 || true
-        wait "$window_vnc_pid" 2>/dev/null || true
-    fi
+    stop_window_child "$window_monitor_pid"
+    stop_window_child "$window_vnc_pid"
     release_client || true
     rm -f "$runtime_dir/window.port"
+}
+
+stop_window_child() {
+    local pid="$1"
+
+    [[ -n "$pid" ]] || return 0
+    kill "$pid" >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+        kill -0 "$pid" >/dev/null 2>&1 || break
+        sleep 0.1
+    done
+    if kill -0 "$pid" >/dev/null 2>&1; then
+        kill -KILL "$pid" >/dev/null 2>&1 || true
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
+monitor_client_window() {
+    local selected="$1"
+    local candidate=""
+    local geometry=""
+    local selected_geometry=""
+    local screen_height=0
+    local screen_size=""
+    local screen_width=0
+    local source_fullscreen=false
+    local viewer_fullscreen_owned=false
+
+    screen_size="$(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdpyinfo 2>/dev/null |
+            /usr/bin/sed -n \
+                's/^[[:space:]]*dimensions:[[:space:]]*\([0-9]\+x[0-9]\+\).*/\1/p' |
+            /usr/bin/head -n 1
+    )"
+    if [[ "$screen_size" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        screen_width="${BASH_REMATCH[1]}"
+        screen_height="${BASH_REMATCH[2]}"
+    fi
+    selected_geometry="$(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool getwindowgeometry --shell "$selected" 2>/dev/null || true
+    )"
+
+    while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
+        candidate="$(find_client_window | /usr/bin/tail -n 1)"
+        geometry=""
+        if [[ -n "$candidate" ]]; then
+            geometry="$(
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/xdotool getwindowgeometry --shell "$candidate" \
+                        2>/dev/null || true
+            )"
+        fi
+        if [[ -n "$candidate" && -n "$geometry" &&
+              ( "$candidate" != "$selected" ||
+                "$geometry" != "$selected_geometry" ) ]]; then
+            if /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/x11vnc \
+                    -env "X11VNC_REMOTE=$window_remote_channel" \
+                    -R "sid:$candidate" >/dev/null 2>&1; then
+                selected="$candidate"
+                selected_geometry="$geometry"
+            fi
+        fi
+        source_fullscreen=false
+        if [[ -n "$candidate" ]] &&
+           /usr/bin/env DISPLAY="$bridge_display" \
+               XAUTHORITY="$bridge_xauthority" \
+               /usr/bin/xprop -id "$candidate" _NET_WM_STATE 2>/dev/null |
+               /usr/bin/grep -q '_NET_WM_STATE_FULLSCREEN'; then
+            source_fullscreen=true
+        fi
+        # Some UU/Wine windows drop the EWMH fullscreen flag while retaining
+        # the exact screen-sized video surface. Keep the local viewer full.
+        if ((screen_width > 0 && screen_height > 0)) &&
+           [[ "$geometry" == *$'\n'"WIDTH=$screen_width"$'\n'* &&
+              "$geometry" == *$'\n'"HEIGHT=$screen_height"$'\n'* ]]; then
+            source_fullscreen=true
+        fi
+        if [[ "$source_fullscreen" == true &&
+              "$viewer_fullscreen_owned" == false ]]; then
+            if set_local_viewer_fullscreen add; then
+                viewer_fullscreen_owned=true
+            fi
+        elif [[ "$source_fullscreen" == false &&
+                "$viewer_fullscreen_owned" == true ]]; then
+            if set_local_viewer_fullscreen remove; then
+                viewer_fullscreen_owned=false
+            fi
+        fi
+        sleep 0.5
+    done
 }
 
 restore_private_focus() {
@@ -357,7 +462,7 @@ prepare_relay_vnc_auth() {
     mv -f "$temporary" "$relay_vnc_auth_file"
 }
 
-activate_existing_window() {
+find_local_viewer_window() {
     local window=""
 
     [[ -n "${DISPLAY:-}" ]] || return 1
@@ -371,6 +476,22 @@ activate_existing_window() {
         /usr/bin/xdotool search --class 'TigerVNC Viewer' 2>/dev/null || true
     )
     [[ -n "$window" ]] || return 1
+    printf '%s\n' "$window"
+}
+
+set_local_viewer_fullscreen() {
+    local action="$1"
+    local window=""
+
+    window="$(find_local_viewer_window)" || return 1
+    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
+        -b "$action,fullscreen" >/dev/null 2>&1
+}
+
+activate_existing_window() {
+    local window=""
+
+    window="$(find_local_viewer_window)" || return 1
     /usr/bin/xdotool windowactivate --sync "$window" >/dev/null 2>&1
 }
 
@@ -535,7 +656,7 @@ open_window() {
         return 1
     fi
     for command in /usr/bin/flock /usr/bin/ss /usr/bin/vncviewer \
-        /usr/bin/x11vnc /usr/bin/xdotool /usr/bin/xdpyinfo; do
+        /usr/bin/x11vnc /usr/bin/xdotool /usr/bin/xdpyinfo /usr/bin/wmctrl; do
         if [[ ! -x "$command" ]]; then
             notify_error "UU window dependency is missing: $command"
             return 1
@@ -548,8 +669,13 @@ open_window() {
         if activate_existing_window; then
             return 0
         fi
-        notify_error 'The UU Remote window is already starting.'
-        return 1
+        if ! /usr/bin/flock -w 4 9; then
+            if activate_existing_window; then
+                return 0
+            fi
+            notify_error 'The UU Remote window is still closing; try again.'
+            return 1
+        fi
     fi
     if ! ensure_bridge; then
         notify_error 'The Ubuntu desktop bridge could not start.'
@@ -569,6 +695,7 @@ open_window() {
         notify_error 'No free loopback port is available for the UU window.'
         return 1
     }
+    window_remote_channel="UURB_WINDOW_${UID}_${window_port}_$$"
 
     printf '%s\n' "$window_port" >"$runtime_dir/window.port"
     chmod 0600 "$runtime_dir/window.port"
@@ -577,14 +704,15 @@ open_window() {
     trap 'exit 143' TERM HUP
     focus_client
 
-    # Mirror the root scene at the UU window's coordinates. Unlike -id,
-    # -sid can show separate popups inside this rectangle. A remote session
-    # outside it still needs the native controller path.
+    # Mirror the root scene at the current UU window's coordinates. Unlike
+    # -id, -sid can show separate popups inside this rectangle. The monitor
+    # retargets this same VNC connection when UU opens a larger session window.
     /usr/bin/env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 \
         /usr/bin/x11vnc \
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
         -sid "$client_window" \
+        -env "X11VNC_REMOTE=$window_remote_channel" \
         -rfbport "$window_port" \
         -listen 127.0.0.1 \
         -localhost \
@@ -613,6 +741,9 @@ open_window() {
         notify_error 'The UU management window could not be exposed locally.'
         return 1
     fi
+
+    monitor_client_window "$client_window" &
+    window_monitor_pid=$!
 
     set +e
     /usr/bin/vncviewer \

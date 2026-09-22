@@ -248,34 +248,44 @@ run:
 uu-remote open
 ```
 
-Use **UU Remote** only for host account/device management. To control another
-computer with native multi-window UI, use the separate **UU Remote Controller**
-entry. It asks before temporarily stopping this Ubuntu host's bridge service,
-runs the official client on the visible desktop, and restores the host service
-when the client closes. Do not use controller mode when you are connected to
-this Ubuntu through UU: pausing the host would disconnect your own session.
-A separate Wine-generated **UU远程** shortcut may point at a different prefix
-and bypass this bridge.
+Use the single **UU Remote** desktop entry for host account/device management
+and experimental control of another computer. It follows the active UU
+session window when that window opens, moves, or changes size; closing its
+viewer does not stop this Ubuntu host service. Matching legacy desktop
+shortcuts created by Wine or older bridge versions are archived under
+`~/.local/share/uu-remote-bridge/old-shortcuts/` rather than deleted.
+
+If this windowed path fails on a specific UU release, the advanced fallback
+`uu-remote control` starts the official Windows client through Wine directly
+on the visible Ubuntu desktop. It asks before temporarily stopping the host
+service and restores the service when the client closes. Never confirm this
+fallback while you are connected to this Ubuntu through UU: that would
+disconnect your own session.
 The bridge service advertises this Ubuntu host in the background after the
 official UU account has been authenticated; merely opening the window is not
 proof that another device can connect. Check `uu-remote status` if it appears
 offline.
 
-This opens a TigerVNC window showing the UU application region. The VNC
-sidecar can show separate popups only while they remain inside that region;
-it is not guaranteed to show a full remote session. UU's client, host server,
+This opens a TigerVNC window showing the active UU application region. The VNC
+sidecar follows UU's larger remote-session window and advertises its new
+framebuffer size to the viewer. When UU enters fullscreen, the local viewer
+also enters fullscreen; a locally requested fullscreen can still be toggled
+independently. Separate popups must still fit within the
+currently selected window's rectangle. UU's client, host server,
 input broker, and `Ubuntu-Desktop-Relay` remain together on the private X display; a
 loopback-only VNC sidecar carries the application's screen region to GNOME.
 It does not expose the complete private desktop. It also avoids starting a
 second Wine prefix or splitting one Wine prefix across two X displays. Closing the window minimizes
 the UU client and restores relay focus automatically.
 
-The VNC management view is not a substitute for the native controller mode:
 UU can create, hide, and destroy several top-level windows while connecting
-to another computer. The controller entry avoids the fixed-window capture
-boundary, but cannot keep this Ubuntu host online at the same time. The
-controller path still needs a real two-computer acceptance test; successful
-popup and input tests alone do not prove that UU's remote video will render.
+to another computer. Window switching and resizing pass isolated X11/VNC
+tests, but the complete remote session still needs a real two-computer
+acceptance test; those local tests do not prove that UU's video will render.
+If a black band is already present in UU's private source window, this bridge
+cannot fill it by enlarging the VNC viewer. Changing the other computer's
+resolution is a separate, explicit UU/Windows display choice; the bridge does
+not do that automatically.
 
 The localhost-only noVNC view remains available for bridge diagnostics:
 

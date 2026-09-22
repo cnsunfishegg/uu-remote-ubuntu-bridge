@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "review_status": "experimental",
+  "product": "NetEase UU Remote",
+  "version": "4.41.1.2335",
+  "architecture": "x86_64",
+  "installer": {
+    "filename": "uuyc_4.41.1.exe",
+    "url": "https://api.nrd.nie.163.com/api/v1/release/dl/1?channel=gwqd",
+    "sha256": "4de4af35656d8395e01be64d094c5f750b2fd7c8b47db4289bce7b05cf85412e"
+  },
+  "server": {
+    "filename": "GameViewerServer.exe",
+    "size": 33507832,
+    "original_sha256": "2ed66758bfa72bab8b79779c974c37aff61ec2d8f56c6ab93eb066c46d87bdec",
+    "patched_sha256": "4ec1bde3e9eb90ed641fb70a1d59cb59007c9d94cc9b653f922b03351a016145",
+    "patches": [
+      {
+        "id": "read-setting-virtual-input-result",
+        "description": "Return false from the virtual-input setting read",
+        "rationale": "The 4.41.1.2335 setting-read sequence exactly matches the reviewed 4.39 behavior at a new unique offset. This experimental test keeps settings refresh from re-enabling the unavailable gvinput driver path.",
+        "file_offset": "0x5a8452",
+        "original": "83fb020f94c08807488b4c24784833cc",
+        "replacement": "83fb0231c0908807488b4c24784833cc"
+      },
+      {
+        "id": "runtime-virtual-input-setter",
+        "description": "Store false in the runtime virtual-input setter",
+        "rationale": "At this unique 4.41.1.2335 target, movzx esi,dl feeds the byte stored through r14. The same-length xor esi,esi; nop replacement forces that runtime value false for this isolated startup test.",
+        "file_offset": "0x5a8504",
+        "original": "0fb6f24c8bf133ff897c2430488b5908",
+        "replacement": "31f6904c8bf133ff897c2430488b5908"
+      }
+    ]
+  },
+  "health_monitor": {
+    "filename": "GameViewerHealthd.exe",
+    "original_sha256": "782e0c7474287ce888ed01ebfb9e37ba0d1eef317d65190a2f59280a14216429"
+  },
+  "landmarks": [
+    "virtual switch state:",
+    "virtual_mouse_setting result=updated enabled=",
+    "gvinput_open result=failed fallback=send_input",
+    "gvinput_send result=failed fallback=send_input code="
+  ],
+  "imports": [
+    "USER32.dll!SendInput",
+    "wevtapi.dll!EvtOpenPublisherMetadata"
+  ],
+  "experimental": {
+    "scope": "An isolated, prefix-only local sign-in UI startup experiment on Ubuntu 26.04. It deliberately does not assemble the RDP relay runtime.",
+    "requires": [
+      "install.sh --experimental-4-41",
+      "the dedicated uu-remote-4.41-experimental Wine prefix",
+      "an already verified local installer"
+    ],
+    "prohibits": [
+      "RDP configuration",
+      "RDP relay runtime",
+      "user services",
+      "automatic startup",
+      "unattended mode",
+      "automatic updates"
+    ],
+    "known_limitation": "The 4.39 constructor patch could not be semantically re-established for 4.41. This manifest intentionally omits it and must never be promoted to an approved release without full behavioral validation."
+  },
+  "audit": {
+    "baseline_version": "4.39.2.1561",
+    "source_audit": "build/audits/4.41.1.2335-2ed66758bfa7/REPORT.md",
+    "warning": "This is an explicit opt-in experimental manifest, not an approved release."
+  }
+}

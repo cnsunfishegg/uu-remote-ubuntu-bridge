@@ -4,7 +4,16 @@ set -Eeuo pipefail
 umask 077
 
 service_name="${UURB_SERVICE_NAME:-uu-remote-bridge.service}"
-wine_bin="${UURB_WINE_BIN:-/opt/wine-stable/bin/wine}"
+environment_file="$HOME/.config/uu-remote-bridge/environment"
+saved_setting() {
+    local name="$1"
+
+    [[ -f "$environment_file" ]] || return 0
+    /usr/bin/sed -n "s/^${name}=//p" "$environment_file" | \
+        /usr/bin/tail -n 1
+}
+saved_wine_bin="$(saved_setting UURB_WINE_BIN)"
+wine_bin="${UURB_WINE_BIN:-${saved_wine_bin:-/opt/wine-stable/bin/wine}}"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge"
 default_prefix="$HOME/.local/share/wineprefixes/uu-remote"
 systemctl_user=(

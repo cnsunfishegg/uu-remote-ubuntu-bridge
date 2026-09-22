@@ -2,11 +2,47 @@
 
 set -Eeuo pipefail
 
-export WINEPREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/uu-remote}"
+environment_file="$HOME/.config/uu-remote-bridge/environment"
+saved_setting() {
+    local name="$1"
+
+    [[ -f "$environment_file" ]] || return 0
+    /usr/bin/sed -n "s/^${name}=//p" "$environment_file" | \
+        /usr/bin/tail -n 1
+}
+saved_wine_prefix="$(saved_setting UURB_WINEPREFIX)"
+saved_wine_bin="$(saved_setting UURB_WINE_BIN)"
+saved_wineserver_bin="$(saved_setting UURB_WINESERVER_BIN)"
+saved_uu_audio="$(saved_setting UURB_UU_AUDIO)"
+export WINEPREFIX="${WINEPREFIX:-${saved_wine_prefix:-$HOME/.local/share/wineprefixes/uu-remote}}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 
-wine_bin="${WINE_BIN:-/opt/wine-stable/bin/wine}"
-wineserver_bin="${WINESERVER_BIN:-/opt/wine-stable/bin/wineserver}"
+wine_bin="${WINE_BIN:-${UURB_WINE_BIN:-${saved_wine_bin:-/opt/wine-stable/bin/wine}}}"
+wineserver_bin="${WINESERVER_BIN:-${UURB_WINESERVER_BIN:-${saved_wineserver_bin:-/opt/wine-stable/bin/wineserver}}}"
+uu_audio_setting="${UURB_UU_AUDIO:-${saved_uu_audio:-system}}"
+audio_alsa_config="${UURB_UU_AUDIO_ALSA_CONFIG:-$HOME/.config/uu-remote-bridge/alsa-null.conf}"
+if [[ "$uu_audio_setting" == off ]]; then
+    [[ -r "$audio_alsa_config" ]] || {
+        printf 'UU Remote silent-audio configuration is missing; rerun the installer.\n' >&2
+        exit 1
+    }
+    export ALSA_CONFIG_PATH="$audio_alsa_config"
+    export WINEDLLOVERRIDES='winebth.sys=d;winepulse.drv=d;winedbg.exe=d;mscoree,mshtml='
+    export PULSE_SERVER="unix:${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge/no-pulse"
+    export PIPEWIRE_REMOTE=uu-remote-disabled
+    export SDL_AUDIODRIVER=dummy
+elif [[ "$uu_audio_setting" == system ]]; then
+    export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;mscoree,mshtml='
+else
+    printf 'UU Remote audio mode must be off or system.\n' >&2
+    exit 2
+fi
+if [[ "$WINEPREFIX" != /* || "$wine_bin" != /* ||
+      "$wineserver_bin" != /* || ! -x "$wine_bin" ||
+      ! -x "$wineserver_bin" ]]; then
+    printf 'UU Remote Wine runtime is unavailable; rerun the installer.\n' >&2
+    exit 1
+fi
 wine_stop_bin="$HOME/.local/libexec/uu-remote-stop-wine-prefix"
 connection_status_bin="$HOME/.local/libexec/uu-connection-status"
 registry_cleaner_bin="$HOME/.local/libexec/uu-clean-wine-device-registry"
@@ -49,7 +85,8 @@ case "${1:-open}" in
             notify_error 'The Wine device-registry repair helper is not installed.'
             exit 1
         fi
-        exec "$registry_cleaner_bin" --manage-service "$WINEPREFIX"
+        exec /usr/bin/env WINE_BIN="$wine_bin" WINESERVER_BIN="$wineserver_bin" \
+            "$registry_cleaner_bin" --manage-service "$WINEPREFIX"
         ;;
     update)
         shift || true

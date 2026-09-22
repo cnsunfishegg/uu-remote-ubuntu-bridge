@@ -6,7 +6,7 @@
   "architecture": "x86_64",
   "installer": {
     "filename": "uu-4.39.2.1561.exe",
-    "url": "https://api.nrd.nie.163.com/api/v1/release/dl/1?channel=gwqd",
+    "url": "https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe",
     "sha256": "cf06187be7b1382eab9d53afa129e4dc0dc07b0c7526d1e7a849475e0ca046f5"
   },
   "server": {

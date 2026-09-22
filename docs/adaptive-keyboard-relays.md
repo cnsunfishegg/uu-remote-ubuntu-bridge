@@ -7,7 +7,7 @@ source of most apparently random symbol failures.
 | Path | What should cross the boundary | Host responsibility |
 | --- | --- | --- |
 | XRDP | RDP keyboard metadata and scan codes | Let XRDP select the client-reported layout |
-| RealVNC/x11vnc | X11/RFB keysyms | Keep `modtweak`, XKB lookup, and temporary keysym support enabled |
+| TigerVNC/x11vnc | X11/RFB keysyms | Keep `modtweak`, XKB lookup, and temporary keysym support enabled |
 | UU computer keyboard | Physical Windows key events | Use the selected `rdp` or direct `x11` behavior track |
 | UU native phone keyboard | Unicode commits normalized by the broker | Keep this separate from the physical-key path |
 
@@ -52,11 +52,11 @@ the selected Ubuntu desktop inside UU's canvas. It now defaults to:
 UURB_VNC_GRAB_KEYBOARD=on
 ```
 
-The corresponding viewer receives `-GrabKeyboard=1`. This is important in a
-nested chain: without the grab, the intermediate X desktop may consume Shift,
-Ctrl, Alt, or Super while the base key still reaches the inner desktop. The
-visible symptom is exact and misleading: `(` becomes `8`, `?` becomes `/`,
-`@` becomes `2`, and Ctrl shortcuts stop working.
+The corresponding TigerVNC viewer receives `-FullscreenSystemKeys=1`, so a
+full-screen private canvas does not consume its own special-key chord before
+the relay can receive it. Ordinary UU keyboard and pointer events use the
+authenticated direct-X11 helper on an X11 target, so they do not depend on a
+proprietary VNC viewer grabbing the host keyboard.
 
 The localhost x11vnc boundary is launched explicitly with:
 

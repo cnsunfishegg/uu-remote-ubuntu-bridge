@@ -78,6 +78,12 @@ class RuntimeScriptTests(unittest.TestCase):
         verifier = (REPOSITORY / "scripts" / "verify.sh").read_text()
         self.assertIn("--allow-runtime-drift", verifier)
         self.assertIn("installed runtime differs from pulled source", verifier)
+        self.assertIn("uu_cloud_authenticated()", verifier)
+        self.assertIn("UU cloud account session is authenticated", verifier)
+        self.assertIn(
+            "UU has local account files but is not authenticated with the UU cloud",
+            verifier,
+        )
 
     def test_wine_device_registry_hygiene_is_reversible_and_reusable(self):
         installer = (REPOSITORY / "install.sh").read_text()
@@ -91,11 +97,22 @@ class RuntimeScriptTests(unittest.TestCase):
 
         self.assertIn('devcon_backup="$devcon_exe.uu-original"', installer)
         self.assertIn("clean-wine-device-registry", installer)
+        self.assertIn(
+            'WINE_BIN="$wine_bin" WINESERVER_BIN="$wineserver_bin"',
+            installer,
+        )
         self.assertIn("system.reg.before-device-hygiene", cleaner)
         self.assertIn("--manage-service", cleaner)
         self.assertIn("restore an unknown devcon.exe backup", uninstaller)
         self.assertIn("overwrite an unknown live devcon.exe", uninstaller)
-        self.assertIn("Wine device registry cannot accumulate", verifier)
+        self.assertIn(
+            "Wine device registry has no stale input or Bluetooth devices",
+            verifier,
+        )
+        self.assertIn(
+            'WINE_BIN="$wine_bin" WINESERVER_BIN="$wineserver_bin"',
+            command,
+        )
         self.assertIn("repair-registry)", command)
         self.assertIn("scripts/clean-wine-device-registry", digest)
         self.assertIn("scripts/inspect-wine-device-registry.py", digest)
@@ -164,11 +181,20 @@ class RuntimeScriptTests(unittest.TestCase):
 
         self.assertIn('uu_audio_setting="${UURB_UU_AUDIO:-system}"', launcher)
         self.assertIn('[[ "$uu_audio_setting" != system', launcher)
-        self.assertIn("winepulse.drv=d;winedbg.exe=d", launcher)
         self.assertIn(
-            "export WINEDLLOVERRIDES='winedbg.exe=d;mscoree,mshtml='",
+            "winebth.sys=d;winepulse.drv=d;winedbg.exe=d",
             launcher,
         )
+        self.assertIn(
+            "export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;mscoree,mshtml='",
+            launcher,
+        )
+        self.assertIn(
+            'export PULSE_SERVER="unix:${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge/no-pulse"',
+            launcher,
+        )
+        self.assertIn("export PIPEWIRE_REMOTE=uu-remote-disabled", launcher)
+        self.assertIn("export SDL_AUDIODRIVER=dummy", launcher)
         self.assertIn("pcm.!default", silent_alsa)
         self.assertIn("type null", silent_alsa)
         self.assertIn("alsa-null.conf", upgrader)
@@ -209,9 +235,14 @@ class RuntimeScriptTests(unittest.TestCase):
             launcher.index('if [[ -z "$fallback_bus" ]]'),
         )
         self.assertIn(
-            "Waiting for logged-in GNOME desktop target '$desktop_target'",
+            "Waiting for logged-in graphical desktop target '$desktop_target'",
             launcher,
         )
+        self.assertIn(
+            'if [[ "$desktop_relay" == vnc && "$desktop_target" == :*',
+            launcher,
+        )
+        self.assertIn('"manager-environment" ""', launcher)
         self.assertIn("expected an XRDP session", verifier)
         self.assertIn('relay_normalized_display="$(', verifier)
         self.assertIn(
@@ -240,24 +271,33 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn("-modtweak", launcher)
         self.assertIn("-xkb", launcher)
         self.assertIn("-add_keysyms", launcher)
+        self.assertIn("-nowf", launcher)
+        self.assertIn("-nonap", launcher)
+        self.assertIn("-sb 0", launcher)
+        self.assertIn("-wait 10", launcher)
+        self.assertIn("-defer 0", launcher)
+        self.assertIn("-nowait_bog", launcher)
         self.assertIn("-seldir recv", launcher)
         self.assertIn(
-            '-GrabKeyboard="$vnc_grab_keyboard_value"', launcher
+            '-FullscreenSystemKeys="$vnc_grab_keyboard_value"', launcher
         )
-        self.assertIn("-ClientCutText=1", launcher)
-        self.assertIn("-ServerCutText=0", launcher)
+        self.assertIn("-SendClipboard=1", launcher)
+        self.assertIn("-AcceptClipboard=0", launcher)
         self.assertIn("-SendPrimary=0", launcher)
-        self.assertIn("-SendInitialClipboard=0", launcher)
+        self.assertIn("-SetPrimary=0", launcher)
+        self.assertIn("-AutoSelect=0", launcher)
+        self.assertIn("-PreferredEncoding=Raw", launcher)
+        self.assertIn("-PointerEventInterval=0", launcher)
+        self.assertIn("-AlwaysCursor=1", launcher)
+        self.assertIn("-CursorType=System", launcher)
         self.assertIn("DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null", launcher)
-        self.assertIn("^127\\.0\\.0\\.1:.* - RealVNC Viewer$", launcher)
-        self.assertIn("-AcceptBell=0", launcher)
-        self.assertIn("-AudioVolume=0", launcher)
+        self.assertIn("Ubuntu\n            # ships TigerVNC", launcher)
         self.assertIn('"$desktop_x11vnc_pid"', launcher)
         self.assertIn('"$vncviewer_pid"', launcher)
         self.assertIn("vnc_relay_ready", verifier)
         self.assertIn("localhost VNC relay owns", verifier)
         self.assertIn("candidate_relay_window_id", launcher)
-        self.assertIn("RealVNC may replace its initial top-level window", launcher)
+        self.assertIn("The native viewer may replace its initial top-level window", launcher)
         self.assertIn("device_init: success", verifier)
         self.assertIn("auto login success", verifier)
         self.assertIn("handle response for: create room, error_code:0", verifier)
@@ -578,8 +618,16 @@ terminal_bridge_pid=
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
             wine_probe = temporary_path / "wine-probe"
-            shutil.copy2("/bin/sleep", wine_probe)
-            wine_probe.chmod(0o755)
+            wine_probe_source = temporary_path / "wine-probe.c"
+            wine_probe_source.write_text(
+                "#include <unistd.h>\n"
+                "int main(void) { sleep(60); return 0; }\n",
+                encoding="ascii",
+            )
+            subprocess.run(
+                ["gcc", "-o", str(wine_probe), str(wine_probe_source)],
+                check=True,
+            )
             target_prefix = str(temporary_path / "target-prefix")
             other_prefix = str(temporary_path / "other-prefix")
             target_environment = os.environ | {"WINEPREFIX": target_prefix}
@@ -637,6 +685,40 @@ terminal_bridge_pid=
         self.assertIn('ulimit -Sn "$target_limit"', launcher)
         self.assertIn("GNOME RDP descriptor limit", verifier)
         self.assertIn("descriptor growth stayed bounded", verifier)
+
+    def test_ubuntu_26_04_uses_its_system_libei_without_changing_24_04(self):
+        policy = REPOSITORY / "scripts" / "platform-support.sh"
+        installer = (REPOSITORY / "install.sh").read_text()
+        launcher = (REPOSITORY / "scripts" / "uu-remote-bridge").read_text()
+        verifier = (REPOSITORY / "scripts" / "verify.sh").read_text()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "source \"$1\"; "
+                "uurb_select_platform ubuntu 24.04; "
+                "printf '%s:%s\\n' \"$UURB_PLATFORM\" \"$UURB_LIBEI_MODE\"; "
+                "uurb_select_platform ubuntu 26.04; "
+                "printf '%s:%s\\n' \"$UURB_PLATFORM\" \"$UURB_LIBEI_MODE\"; "
+                "! uurb_select_platform ubuntu 25.10",
+                "bash",
+                str(policy),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            "ubuntu-24.04:backport\nubuntu-26.04:system\n",
+            result.stdout,
+        )
+        self.assertIn("uurb_select_platform", installer)
+        self.assertIn("UURB_LIBEI_MODE=%s", installer)
+        self.assertIn('"LD_LIBRARY_PATH="', launcher)
+        self.assertIn("Ubuntu 26.04's system ABI", launcher)
+        self.assertIn("Ubuntu 26.04 must use UURB_LIBEI_MODE=system", launcher)
+        self.assertIn("GNOME RDP uses Ubuntu system libei", verifier)
 
     def test_installed_runtime_drift_is_detected(self):
         installer = (REPOSITORY / "install.sh").read_text()
@@ -780,7 +862,7 @@ terminal_bridge_pid=
         self.assertNotIn("SetClipboardData", listener)
         self.assertNotIn("SendInput", companion + listener)
         self.assertIn("-seldir recv", launcher)
-        self.assertIn("-ServerCutText=0", launcher)
+        self.assertIn("-AcceptClipboard=0", launcher)
         self.assertIn('if [[ "$desktop_relay" != vnc ]]; then', launcher)
         self.assertIn('"$x11_clipboard_pid"', launcher)
         self.assertIn('"$wine_clipboard_bridge_pid"', launcher)
@@ -999,6 +1081,8 @@ terminal_bridge_pid=
         self.assertIn("release_pressed_inputs", helper)
         self.assertIn("minimum_hold_ms", helper)
         self.assertIn("XKeysymToKeycode", helper)
+        self.assertIn("XKeycodeToKeysym", helper)
+        self.assertIn("primary_keysym_to_keycode", helper)
         self.assertIn("extended_scan_to_keysym", helper)
         self.assertIn("0xff52UL; /* XK_Up */", helper)
         self.assertIn("0xff54UL; /* XK_Down */", helper)
@@ -1159,10 +1243,17 @@ terminal_bridge_pid=
             self.assertEqual(resolve(saved="6"), "6")
             self.assertEqual(resolve(saved="6", explicit="11"), "11")
 
-    def test_routine_input_retains_proven_broker_fallback(self):
+    def test_physical_input_uses_broker_and_other_input_retains_fallback(self):
         bridge = (REPOSITORY / "src" / "uu_input_bridge.c").read_text()
+        broker = (REPOSITORY / "src" / "uu_input_broker.c").read_text()
 
-        self.assertIn("if (unicode_keyboard)", bridge)
+        self.assertIn(
+            "if (unicode_keyboard || physical_keyboard || mouse_input)",
+            bridge,
+        )
+        self.assertIn("Route physical input", bridge)
+        self.assertIn("UU input broker preconnected", bridge)
+        self.assertIn("UU X11 input transport preconnected", broker)
         fallback_condition = bridge.index("if (result != count) {")
         broker_call = bridge.index(
             "result = send_through_broker", fallback_condition

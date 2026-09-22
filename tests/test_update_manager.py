@@ -22,11 +22,28 @@ from uu_update_manager import (
     promotion_acceptance,
     release_version,
     sanitize_url,
+    should_build_libei_backport,
     version_key,
 )
 
 
 class UpdateManagerTests(unittest.TestCase):
+    def test_libei_backport_prebuild_is_limited_to_ubuntu_24_04(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / "os-release"
+            release.write_text(
+                'ID=ubuntu\nVERSION_ID="24.04"\n', encoding="utf-8"
+            )
+            self.assertTrue(should_build_libei_backport(release))
+            release.write_text(
+                'ID=ubuntu\nVERSION_ID="26.04"\n', encoding="utf-8"
+            )
+            self.assertFalse(should_build_libei_backport(release))
+            release.write_text(
+                'ID=debian\nVERSION_ID="13"\n', encoding="utf-8"
+            )
+            self.assertFalse(should_build_libei_backport(release))
+
     def config(self, state_dir: Path) -> Config:
         return Config(
             path=state_dir / "config.json",

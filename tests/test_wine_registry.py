@@ -98,6 +98,13 @@ class WineRegistryTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+            plan = subprocess.run(
+                [str(INSPECTOR), "plan", str(prefix)],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual("", plan)
 
     def test_disabled_service_does_not_hide_accumulated_bluetooth_devices(self):
         with tempfile.TemporaryDirectory() as temporary:

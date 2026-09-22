@@ -92,6 +92,22 @@ def version_key(value: str) -> tuple[int, ...]:
     return parts + (0,) * (4 - len(parts))
 
 
+def should_build_libei_backport(
+    os_release: Path = Path("/etc/os-release"),
+) -> bool:
+    """Return whether this host needs the Ubuntu 24.04-only libei build."""
+    try:
+        fields = {}
+        for raw_line in os_release.read_text(encoding="utf-8").splitlines():
+            if "=" not in raw_line:
+                continue
+            key, value = raw_line.split("=", 1)
+            fields[key] = value.strip().strip('"')
+    except OSError:
+        return False
+    return fields.get("ID") == "ubuntu" and fields.get("VERSION_ID") == "24.04"
+
+
 def promotion_acceptance(raw: dict[str, Any]) -> dict[str, Any]:
     acceptance = raw.get("acceptance")
     if not isinstance(acceptance, dict) or acceptance.get("schema_version") != 1:
@@ -1340,11 +1356,13 @@ class Manager:
             log_path.chmod(0o600)
             return {"attempted": False, "reason": "known-good checkout failed tests"}
 
-        for builder, output in (
+        builders = [
             ("scripts/build-compat.sh", "build/compat"),
             ("scripts/build-winpr.sh", "build/freerdp"),
-            ("scripts/build-libei.sh", "build/libei"),
-        ):
+        ]
+        if should_build_libei_backport():
+            builders.append(("scripts/build-libei.sh", "build/libei"))
+        for builder, output in builders:
             path = checkout / builder
             if not path.is_file():
                 continue

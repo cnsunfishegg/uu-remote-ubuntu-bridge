@@ -48,12 +48,17 @@ static BOOL read_all(HANDLE handle, void *buffer, DWORD size)
     return TRUE;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     input_bridge_request request;
     input_bridge_response response;
     INPUT inputs[ACCEPTANCE_INPUTS];
     HANDLE pipe;
+
+    if (argc > 2) {
+        fprintf(stderr, "usage: uu-mouse-probe.exe [BRIDGE_DLL]\n");
+        return 2;
+    }
 
     ZeroMemory(inputs, sizeof(inputs));
     inputs[0].type = INPUT_MOUSE;
@@ -74,6 +79,27 @@ int main(void)
     inputs[5].type = INPUT_MOUSE;
     inputs[5].mi.mouseData = (DWORD)-WHEEL_DELTA;
     inputs[5].mi.dwFlags = MOUSEEVENTF_HWHEEL;
+
+    if (argc == 2) {
+        HMODULE bridge = LoadLibraryA(argv[1]);
+        UINT result;
+        DWORD error;
+
+        if (bridge == NULL) {
+            fprintf(stderr, "LoadLibrary failed: %lu\n",
+                    (unsigned long)GetLastError());
+            return 1;
+        }
+        Sleep(500);
+        SetLastError(ERROR_SUCCESS);
+        result = SendInput(ACCEPTANCE_INPUTS, inputs, sizeof(INPUT));
+        error = GetLastError();
+        printf("requested=%lu result=%lu error=%lu\n",
+               (unsigned long)ACCEPTANCE_INPUTS, (unsigned long)result,
+               (unsigned long)error);
+        FreeLibrary(bridge);
+        return result == ACCEPTANCE_INPUTS && error == ERROR_SUCCESS ? 0 : 1;
+    }
 
     if (!WaitNamedPipeW(INPUT_BRIDGE_PIPE, 5000)) {
         fprintf(stderr, "input broker pipe was not ready: %lu\n",

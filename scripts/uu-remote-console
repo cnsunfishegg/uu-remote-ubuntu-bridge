@@ -176,6 +176,15 @@ find_relay_window() {
         relay="$(
             /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
                 /usr/bin/xdotool search --onlyvisible --all \
+                    --class 'TigerVNC Viewer' \
+                    --name ' - TigerVNC$' 2>/dev/null | \
+                /usr/bin/tail -n 1 || true
+        )"
+    fi
+    if [[ -z "$relay" ]]; then
+        relay="$(
+            /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool search --onlyvisible --all \
                     --class 'realvnc-vncviewer' \
                     --name '^127\.0\.0\.1:.* - RealVNC Viewer$' 2>/dev/null | \
                 /usr/bin/tail -n 1 || true

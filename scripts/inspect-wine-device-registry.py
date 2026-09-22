@@ -240,7 +240,11 @@ def main() -> int:
         return 1
 
     if args.command == "plan":
-        print("\n".join(delete_keys))
+        # An empty print emits one blank line.  Shell consumers using mapfile
+        # would treat that as one empty registry key and then try to delete
+        # it, so emit nothing when there is no audited cleanup action.
+        if delete_keys:
+            print("\n".join(delete_keys))
         return 0
 
     if args.command == "preflight":

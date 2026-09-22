@@ -7,6 +7,7 @@ temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/uurb-x11-mouse.XXXXXX")"
 wine_prefix="$temporary_dir/wine"
 ready_file="$temporary_dir/x11-input.port"
 broker_log="$temporary_dir/input-broker.log"
+bridge_log="$temporary_dir/input-bridge.log"
 token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 xvfb_pid=""
 xev_pid=""
@@ -59,6 +60,9 @@ fi
 x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror \
     -o "$temporary_dir/uu-mouse-probe.exe" \
     "$repo_dir/tests/probes/uu_mouse_probe.c"
+x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror \
+    -o "$temporary_dir/uu-keyboard-probe.exe" \
+    "$repo_dir/tests/probes/uu_keyboard_probe.c"
 
 Xvfb "$display" -screen 0 800x600x24 -ac -nolisten tcp \
     >"$temporary_dir/xvfb.log" 2>&1 &
@@ -95,6 +99,11 @@ DISPLAY="$display" WINEPREFIX="$wine_prefix" WINEDEBUG=-all \
     /opt/wine-stable/bin/wineboot -u >/dev/null 2>&1
 broker_log_windows="$(DISPLAY="$display" WINEPREFIX="$wine_prefix" \
     WINEDEBUG=-all /opt/wine-stable/bin/winepath -w "$broker_log")"
+bridge_log_windows="$(DISPLAY="$display" WINEPREFIX="$wine_prefix" \
+    WINEDEBUG=-all /opt/wine-stable/bin/winepath -w "$bridge_log")"
+bridge_dll_windows="$(DISPLAY="$display" WINEPREFIX="$wine_prefix" \
+    WINEDEBUG=-all /opt/wine-stable/bin/winepath -w \
+    "$temporary_dir/compat/uu-input-bridge.dll")"
 DISPLAY="$display" WINEPREFIX="$wine_prefix" WINEDEBUG=-all \
     WINEDLLOVERRIDES='mscoree,mshtml=' \
     UU_INPUT_BROKER_LOG="$broker_log_windows" \
@@ -107,7 +116,9 @@ sleep 0.5
 
 DISPLAY="$display" WINEPREFIX="$wine_prefix" WINEDEBUG=-all \
     WINEDLLOVERRIDES='mscoree,mshtml=' \
-    /opt/wine-stable/bin/wine "$temporary_dir/uu-mouse-probe.exe"
+    UU_INPUT_BRIDGE_LOG="$bridge_log_windows" \
+    /opt/wine-stable/bin/wine "$temporary_dir/uu-mouse-probe.exe" \
+    "$bridge_dll_windows"
 sleep 0.2
 
 python3 - "$display" "$temporary_dir/xev.log" <<'PY'
@@ -152,5 +163,55 @@ if ! rg -q 'category=mouse .*route=x11-mouse .*result=6 error=0' \
     printf 'broker did not confirm the direct X11 mouse route\n' >&2
     exit 1
 fi
+if ! rg -q 'category=mouse .*route=broker .*result=6 error=0' \
+    "$bridge_log"; then
+    printf 'bridge did not force the mouse batch through the broker\n' >&2
+    exit 1
+fi
+printf 'bridge-route=broker result=6 error=0\n'
 printf 'broker-route=x11-mouse result=6 error=0\n'
-printf 'isolated mouse acceptance passed\n'
+
+DISPLAY="$display" WINEPREFIX="$wine_prefix" WINEDEBUG=-all \
+    WINEDLLOVERRIDES='mscoree,mshtml=' \
+    UU_INPUT_BRIDGE_LOG="$bridge_log_windows" \
+    /opt/wine-stable/bin/wine "$temporary_dir/uu-keyboard-probe.exe" \
+    "$bridge_dll_windows"
+sleep 0.2
+
+python3 - "$temporary_dir/xev.log" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(errors="replace")
+transitions = re.findall(
+    r"(KeyPress|KeyRelease) event,.*?keysym 0x[0-9a-f]+, ([^)]+)\)",
+    text,
+    flags=re.DOTALL,
+)
+expected = [
+    ("KeyPress", "Shift_L"),
+    ("KeyPress", "A"),
+    ("KeyRelease", "A"),
+    ("KeyRelease", "Shift_L"),
+    ("KeyPress", "Left"),
+    ("KeyRelease", "Left"),
+]
+if transitions[-len(expected):] != expected:
+    raise SystemExit(f"keyboard transition mismatch: {transitions!r}")
+print("x11-keyboard=Shift+A,Left press-release")
+PY
+
+if ! rg -q 'category=keyboard .*route=x11 .*result=6 error=0' \
+    "$broker_log"; then
+    printf 'broker did not confirm the direct X11 keyboard route\n' >&2
+    exit 1
+fi
+if ! rg -q 'category=keyboard .*route=broker .*result=6 error=0' \
+    "$bridge_log"; then
+    printf 'bridge did not force the keyboard batch through the broker\n' >&2
+    exit 1
+fi
+printf 'bridge-keyboard-route=broker result=6 error=0\n'
+printf 'broker-keyboard-route=x11 result=6 error=0\n'
+printf 'isolated mouse and keyboard acceptance passed\n'

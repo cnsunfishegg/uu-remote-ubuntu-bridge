@@ -255,7 +255,12 @@ static UINT WINAPI bridged_send_input(UINT count, LPINPUT inputs, int size)
                                             INPUT_KEYBOARD);
     mouse_input = !unicode_keyboard && !physical_keyboard &&
                   contains_input_type(count, inputs, size, INPUT_MOUSE);
-    if (unicode_keyboard) {
+    /* The private Wine canvas can report successful mouse or keyboard
+     * injection even though the visible Linux desktop never receives the
+     * event. Route physical input through the broker first so an active X11
+     * helper owns the real pointer and keys; the broker retains its
+     * established RDP fallback when no X11 helper is configured. */
+    if (unicode_keyboard || physical_keyboard || mouse_input) {
         broker_started_ms = GetTickCount64();
         result = send_through_broker(count, inputs, size, &error);
         broker_ms = (DWORD)(GetTickCount64() - broker_started_ms);
@@ -387,6 +392,7 @@ static BOOL patch_import(HMODULE module, const char *dll_name,
 static DWORD WINAPI initialize_bridge(void *unused)
 {
     uintptr_t send_input_address = 0;
+    BOOL broker_preconnected = FALSE;
     BOOL input_patched;
     BOOL event_log_patched;
 
@@ -401,12 +407,20 @@ static DWORD WINAPI initialize_bridge(void *unused)
     event_log_patched = patch_import(
         GetModuleHandleW(NULL), "wevtapi.dll", "EvtOpenPublisherMetadata",
         (uintptr_t)&safe_evt_open_publisher_metadata, NULL);
+    if (input_patched) {
+        EnterCriticalSection(&broker_lock);
+        broker_preconnected = connect_broker();
+        LeaveCriticalSection(&broker_lock);
+    }
 
     write_log(input_patched ? "UU SendInput bridge active\r\n"
                             : "UU bridge could not find SendInput import\r\n");
     write_log(event_log_patched
                   ? "UU Wine event-log compatibility active\r\n"
                   : "UU bridge could not find event-log import\r\n");
+    write_log(broker_preconnected
+                  ? "UU input broker preconnected\r\n"
+                  : "UU input broker will connect on demand\r\n");
     flush_log();
     return input_patched && event_log_patched ? 0 : 1;
 }

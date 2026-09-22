@@ -135,8 +135,14 @@ if ((${#server_candidates[@]} != 1 || ${#healthd_candidates[@]} != 1)); then
     sandbox_home="$output/sandbox-home"
     sandbox_prefix="$output/wine-prefix"
     sandbox_runtime="$output/sandbox-runtime"
+    # systemd-run parses bind-mount source paths itself.  Keep a private copy
+    # under the staging root so an otherwise valid installer path containing
+    # spaces cannot be split into multiple source paths.  It is never exposed
+    # outside the networkless sandbox and is removed with the work directory.
+    sandbox_installer="$output/sandbox-input.exe"
     mkdir -p "$sandbox_home" "$sandbox_prefix" "$sandbox_runtime"
     chmod 0700 "$sandbox_home" "$sandbox_prefix" "$sandbox_runtime"
+    install -m 0400 "$installer" "$sandbox_installer"
 
     sandbox_body='
             set -Eeuo pipefail
@@ -149,7 +155,7 @@ if ((${#server_candidates[@]} != 1 || ${#healthd_candidates[@]} != 1)); then
             trap cleanup EXIT
             /opt/wine-stable/bin/wine wineboot -u
             /usr/bin/timeout --kill-after=10s 180s \
-                /opt/wine-stable/bin/wine /input/uu-installer.exe /S
+                /opt/wine-stable/bin/wine "${UURB_SANDBOX_INSTALLER:?}" /S
             sleep 2
         '
 
@@ -171,6 +177,9 @@ if ((${#server_candidates[@]} != 1 || ${#healthd_candidates[@]} != 1)); then
                 exit 1
             }
             printf 'Archive extraction had no payload. Using a networkless Bubblewrap sandbox.\n'
+            # The read-only root bind means new top-level mount targets cannot
+            # be created afterward. Reuse the existing /tmp mountpoint as the
+            # only writable staging view instead.
             bwrap \
                 --die-with-parent \
                 --new-session \
@@ -180,24 +189,22 @@ if ((${#server_candidates[@]} != 1 || ${#healthd_candidates[@]} != 1)); then
                 --cap-drop ALL \
                 --ro-bind / / \
                 --tmpfs /home \
-                --tmpfs /tmp \
                 --dev /dev \
                 --proc /proc \
-                --dir /input \
-                --dir /work \
-                --bind "$output" /work \
-                --ro-bind "$installer" /input/uu-installer.exe \
+                --bind "$output" /tmp \
+                --ro-bind "$sandbox_installer" /tmp/uu-installer.exe \
                 --clearenv \
-                --setenv HOME /work/sandbox-home \
-                --setenv WINEPREFIX /work/wine-prefix \
+                --setenv HOME /tmp/sandbox-home \
+                --setenv WINEPREFIX /tmp/wine-prefix \
                 --setenv WINEDEBUG -all \
                 --setenv WINEDLLOVERRIDES 'winedbg.exe=d;mscoree,mshtml=' \
-                --setenv XDG_RUNTIME_DIR /work/sandbox-runtime \
+                --setenv XDG_RUNTIME_DIR /tmp/sandbox-runtime \
+                --setenv UURB_SANDBOX_INSTALLER /tmp/uu-installer.exe \
                 --setenv DISPLAY '' \
                 --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
                 --setenv USER "${USER:-$(id -un)}" \
                 --setenv LOGNAME "${LOGNAME:-$(id -un)}" \
-                --chdir /work \
+                --chdir /tmp \
                 /bin/bash -c "$sandbox_body" \
                 >"$output/sandbox-install.log" 2>&1
             staging_method='bubblewrap-sandbox'
@@ -233,12 +240,13 @@ if ((${#server_candidates[@]} != 1 || ${#healthd_candidates[@]} != 1)); then
                 --property=RemoveIPC=yes \
                 --property=UMask=0077 \
                 --property="BindPaths=$output:/work" \
-                --property="BindReadOnlyPaths=$installer:/input/uu-installer.exe" \
+                --property="BindReadOnlyPaths=$sandbox_installer:/input/uu-installer.exe" \
                 --setenv=HOME=/work/sandbox-home \
                 --setenv=WINEPREFIX=/work/wine-prefix \
                 --setenv=WINEDEBUG=-all \
                 --setenv=WINEDLLOVERRIDES='winedbg.exe=d;mscoree,mshtml=' \
                 --setenv=XDG_RUNTIME_DIR=/work/sandbox-runtime \
+                --setenv=UURB_SANDBOX_INSTALLER=/input/uu-installer.exe \
                 --setenv=DISPLAY= \
                 /bin/bash -c "$sandbox_body" \
                 >"$output/sandbox-install.log" 2>&1
@@ -278,7 +286,8 @@ if [[ "$keep_workdir" == false ]]; then
     rm -rf "$extract_dir" \
         "$output/sandbox-home" \
         "$output/sandbox-runtime" \
-        "$output/wine-prefix"
+        "$output/wine-prefix" \
+        "$output/sandbox-input.exe"
 fi
 
 printf 'staged server: %s\n' "$output/GameViewerServer.exe"

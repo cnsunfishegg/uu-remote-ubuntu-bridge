@@ -18,12 +18,25 @@
 
 </div>
 
+> **关于此 Fork：**本仓库基于
+> [Lachlan Chen 的 UU Remote Ubuntu Bridge 原项目](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)。
+> Wine/Xvfb、RDP/VNC 中继、输入代理、无人值守及升级架构属于原项目。本分支的
+> 工作进行中改动涉及输入路由、静音音频隔离、TigerVNC 中继及 Ubuntu 26.04
+> 预览支持。Ubuntu 26.04 和 UU 4.41 **仍属实验性功能**，不是已广泛验证的
+> 正式版本。保留原作者署名与 MIT 许可证；下文主要继承上游文档，只有明确
+> 标出的部分是此 Fork 的改动。
+
 这个实验性桥接器在独立 Wine 前缀中运行官方 Windows 客户端，并通过本机
 RDP 中继呈现真实的 GNOME Wayland 会话。画面、鼠标、键盘、重新连接和服务
 自动恢复均已验证。
 
 当前版本有意锁定为 UU 远程 `4.33.0.8907`、Ubuntu 24.04、GNOME 46 和
 Wine 11。任何未知二进制文件都会被拒绝，绝不会直接套用旧补丁。
+
+此 fork 额外提供 Ubuntu 26.04 / GNOME 50 的**预览**安装路径：它会使用并
+验证系统的新版 `libei`，不会把 24.04 的旧兼容库载入 GNOME 50。它尚未完成与
+24.04 基线相同的真实控制端验收；部署前请阅读
+[26.04 移植说明](../docs/ubuntu-26-04-port.md)，并先完成其中的六项验收。
 
 UU 只从网易官方域名 [uuyc.163.com](https://uuyc.163.com/) 下载。官方页面
 目前没有列出 Linux 被控端；本桥使用官方 Windows 客户端并核对安装包完整哈希。
@@ -69,7 +82,7 @@ UU 控制端 -> Wine 中的 UU -> 输入代理 -> SDL FreeRDP
 - [原生 Ubuntu 终端](../docs/native-ubuntu-terminal.md)
 - [SSH 别名与双机端口映射](../docs/ssh-and-port-mapping.md)
 
-仓库不包含密码、令牌、设备标识、网易可执行文件或私人日志。本项目属于
+仓库不包含密码、令牌、设备标识、网易可执行文件或私人日志。上游项目属于
 [The Art of Lazying](https://lazying.art)。
 
 如果你更需要独立于厂商的方案，[LazyRemote 中文页](https://remote.lazying.art/zh-Hans/?utm_source=github&utm_medium=readme&utm_campaign=uu_remote_bridge&utm_content=independent_option_zh_hans#review) 由另一套开源 [LazyTunnel](https://github.com/lachlanchen/LazyTunnel) 核心提供自托管的 SSH、终端与 noVNC 访问。这是不同的工具；本仓库仍专注于兼容官方 UU 客户端。

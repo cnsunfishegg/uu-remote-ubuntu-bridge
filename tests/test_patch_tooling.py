@@ -104,6 +104,16 @@ class PatchToolingTests(unittest.TestCase):
         )
         self.assertEqual(self.patched, render_patched(self.original, provisional))
 
+    def test_experimental_manifest_requires_an_explicit_opt_in(self) -> None:
+        experimental = copy.deepcopy(self.raw)
+        experimental["review_status"] = "experimental"
+        with self.assertRaises(ManifestError):
+            manifest_from_dict(experimental, Path("experimental.json"))
+        accepted = manifest_from_dict(
+            experimental, Path("experimental.json"), allow_experimental=True
+        )
+        self.assertEqual("experimental", accepted.review_status)
+
     def test_overlapping_patches_are_rejected(self) -> None:
         overlapping = copy.deepcopy(self.raw)
         duplicate = copy.deepcopy(overlapping["server"]["patches"][0])

@@ -100,11 +100,10 @@ The dedicated VNC relay intentionally permits only the UU/private-to-Ubuntu
 direction:
 
 ```text
-ClientCutText=1
-ServerCutText=0
+SendClipboard=1
+AcceptClipboard=0
 SendPrimary=0
-SendInitialClipboard=0
-ServerClipboardGraceTime=5000
+SetPrimary=0
 x11vnc -seldir recv
 ```
 

@@ -70,8 +70,8 @@ target_display="${displays[0]}"
 private_display="${displays[1]}"
 
 vnc_port=""
-# Keep the RFB display number below 100. RealVNC Viewer accepts HOST:DISPLAY,
-# and some builds do not reliably interpret three-digit display numbers.
+# Keep the RFB display number below 100 so HOST:DISPLAY remains unambiguous
+# across Ubuntu's TigerVNC viewer and other compatible viewers.
 for candidate in {5970..5999}; do
     if ! ss -H -ltn "sport = :$candidate" | grep -q .; then
         vnc_port="$candidate"
@@ -124,15 +124,10 @@ ss -H -ltn "sport = :$vnc_port" | grep -q .
 
 vnc_display=$((vnc_port - 5900))
 DISPLAY="$private_display" DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null \
-    vncviewer '-Log=*:stderr:100' -AllowMainClose=1 \
-    -LogToAddressBook=0 -FullScreen=0 \
-    -EnableToolbar=0 -AcceptBell=0 -AudioVolume=0 -WarnUnencrypted=0 \
-    -VerifyId=0 -Shared=1 -Scaling=Fit -DynamicResolution=0 \
-    -GrabKeyboard=1 -SendKeyEvents=1 -SendPointerEvents=1 \
-    -ClientCutText=1 -ServerCutText=0 -SendPrimary=0 \
-    -SendInitialClipboard=0 -ServerClipboardGraceTime=5000 \
-    -MenuKey= -UpdateScreenshot=0 -ShowSplash=0 -EnableAnalytics=0 \
-    -ShareFiles=0 -EnableRemotePrinting=0 -ChangeServerDefaultPrinter=0 \
+    vncviewer '-Log=*:stderr:100' -FullScreen=0 -Shared=1 \
+    -RemoteResize=0 -ReconnectOnError=0 -AlertOnFatalError=0 \
+    -SecurityTypes=None -FullscreenSystemKeys=1 -SendClipboard=1 \
+    -AcceptClipboard=0 -SendPrimary=0 -SetPrimary=0 \
     "127.0.0.1:$vnc_display" >"$temporary_dir/vncviewer.log" 2>&1 &
 viewer_pid=$!
 pids+=("$viewer_pid")
@@ -253,6 +248,6 @@ if [[ "$observed" != "$semantic_text" ]]; then
     exit 1
 fi
 
-printf 'vnc-clipboard=client-cut-text received server-feedback=disabled\n'
+printf 'vnc-clipboard=private-to-target received reverse-feedback=disabled\n'
 printf 'semantic-target-paste=unicode exact clipboard-loop=absent\n'
 printf 'isolated VNC clipboard acceptance passed\n'

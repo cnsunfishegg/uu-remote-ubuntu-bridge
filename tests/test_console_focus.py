@@ -21,7 +21,7 @@ case "$*" in
   *search*Ubuntu-Desktop-Relay*)
     [[ "$FOCUS_TEST_MODE" == rdp ]] || exit 1
     printf '101\\n';;
-  *search*realvnc-vncviewer*)
+  *search*TigerVNC*|*search*realvnc-vncviewer*)
     [[ "$FOCUS_TEST_MODE" == vnc ]] || exit 1
     printf '202\\n';;
   *) printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG";;

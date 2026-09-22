@@ -21,8 +21,27 @@ cursor_guard_setting="${UURB_CURSOR_GUARD:-off}"
 cursor_size_setting="${UURB_CURSOR_SIZE:-auto}"
 uu_audio_setting="${UURB_UU_AUDIO:-system}"
 wine_prefix="${UURB_WINEPREFIX:-$HOME/.local/share/wineprefixes/uu-remote}"
+wine_bin="${UURB_WINE_BIN:-/opt/wine-stable/bin/wine}"
+wineserver_bin="${UURB_WINESERVER_BIN:-/opt/wine-stable/bin/wineserver}"
 service_name="${UURB_SERVICE_NAME:-uu-remote-bridge.service}"
 environment_file="$HOME/.config/uu-remote-bridge/environment"
+audio_alsa_config="${UURB_UU_AUDIO_ALSA_CONFIG:-$HOME/.config/uu-remote-bridge/alsa-null.conf}"
+saved_libei_mode=''
+if [[ -f "$environment_file" ]]; then
+    saved_libei_mode="$(
+        /usr/bin/sed -n 's/^UURB_LIBEI_MODE=//p' "$environment_file" | \
+            /usr/bin/tail -n 1
+    )"
+fi
+libei_mode="${UURB_LIBEI_MODE:-${saved_libei_mode:-backport}}"
+runtime_os_id=''
+runtime_os_version=''
+if [[ -r /etc/os-release ]]; then
+    # shellcheck source=/dev/null
+    source /etc/os-release
+    runtime_os_id="${ID:-}"
+    runtime_os_version="${VERSION_ID:-}"
+fi
 manager_display="${DISPLAY:-}"
 manager_wayland="${WAYLAND_DISPLAY:-}"
 manager_session_type="${XDG_SESSION_TYPE:-}"
@@ -62,10 +81,11 @@ if [[ "$desktop_target" != auto &&
       "$cursor_guard_setting" != on ]] ||
    [[ "$uu_audio_setting" != system &&
       "$uu_audio_setting" != off ]] ||
+   [[ "$libei_mode" != backport && "$libei_mode" != system ]] ||
    [[ "$cursor_size_setting" != auto &&
       ! "$cursor_size_setting" =~ ^[0-9]{1,3}$ ]] ||
    [[ "$wine_prefix" != /* ]]; then
-    printf 'Invalid UURB desktop target, relay, VNC keyboard grab, display, RDP port, resolution, resolution-follow, descriptor, keyboard, network, cursor, audio, or prefix setting.\n' >&2
+    printf 'Invalid UURB desktop target, relay, VNC keyboard grab, display, RDP port, resolution, resolution-follow, descriptor, keyboard, network, cursor, audio, libei, or prefix setting.\n' >&2
     exit 2
 fi
 vnc_grab_keyboard_value=0
@@ -89,6 +109,44 @@ if [[ "$cursor_size_setting" != auto ]]; then
     if ((cursor_size_setting < 24 || cursor_size_setting > 128)); then
         printf 'UURB cursor size is outside the supported range.\n' >&2
         exit 2
+    fi
+fi
+
+if [[ "$wine_bin" != /* || "$wineserver_bin" != /* ||
+      ! -x "$wine_bin" || ! -x "$wineserver_bin" ]]; then
+    printf 'The configured Wine runtime is unavailable. Rerun the installer.\n' >&2
+    exit 1
+fi
+wine_runtime_dir="${wine_bin%/*}"
+winepath_bin="$wine_runtime_dir/winepath"
+if [[ ! -x "$winepath_bin" ]]; then
+    printf 'The configured Wine runtime has no winepath helper. Rerun the installer.\n' >&2
+    exit 1
+fi
+if [[ "$uu_audio_setting" == off && ! -r "$audio_alsa_config" ]]; then
+    printf 'The private UU silent-audio configuration is missing. Rerun the installer.\n' >&2
+    exit 1
+fi
+
+if [[ "$runtime_os_id:$runtime_os_version" == ubuntu:26.04 &&
+      "$libei_mode" != system ]]; then
+    printf 'Ubuntu 26.04 must use UURB_LIBEI_MODE=system; rerun the installer after the OS upgrade.\n' >&2
+    exit 1
+fi
+if [[ "$runtime_os_id:$runtime_os_version" == ubuntu:24.04 &&
+      "$libei_mode" != backport ]]; then
+    printf 'Ubuntu 24.04 must use UURB_LIBEI_MODE=backport; rerun the installer.\n' >&2
+    exit 1
+fi
+if [[ "$libei_mode" == system ]]; then
+    system_libei_version="$(
+        /usr/bin/dpkg-query -W -f='${Version}' libei1 2>/dev/null || true
+    )"
+    if [[ -z "$system_libei_version" ]] ||
+       ! /usr/bin/dpkg --compare-versions "$system_libei_version" ge 1.5.0; then
+        printf 'Ubuntu 26.04 support requires libei1 1.5.0 or newer; found %s.\n' \
+            "${system_libei_version:-not installed}" >&2
+        exit 1
     fi
 fi
 
@@ -122,9 +180,15 @@ export WINEDEBUG=-all
 # so ambient Bluetooth observations cannot rebuild the device registry.
 if [[ "$uu_audio_setting" == off ]]; then
     # UU starts a WebRTC capture stream on every controller connection even
-    # when the nested FreeRDP relay uses /audio-mode:2. Disable Wine's audio
-    # driver only for this dedicated prefix; video and input remain intact.
+    # when the nested FreeRDP relay uses /audio-mode:2. Keep the dedicated
+    # prefix on its null ALSA backend, and make direct PulseAudio/PipeWire/SDL
+    # discovery fail closed so a vendor capture path cannot reach a physical
+    # microphone. Video and input remain intact.
     export WINEDLLOVERRIDES='winebth.sys=d;winepulse.drv=d;winedbg.exe=d;mscoree,mshtml='
+    export ALSA_CONFIG_PATH="$audio_alsa_config"
+    export PULSE_SERVER="unix:${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge/no-pulse"
+    export PIPEWIRE_REMOTE=uu-remote-disabled
+    export SDL_AUDIODRIVER=dummy
 else
     export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;mscoree,mshtml='
 fi
@@ -136,7 +200,7 @@ export UURB_CURSOR_GUARD_LOG="C:\\users\\$bridge_user\\Temp\\uu-cursor-guard.log
 export UURB_TEXT_KEY_DELAY_MS="$text_key_delay_ms"
 export UURB_PHYSICAL_KEY_DELAY_MS="$physical_key_delay_ms"
 export UURB_PHONE_TEXT_MODE="$phone_text_mode"
-export PATH="/opt/wine-stable/bin:/usr/bin:/bin"
+export PATH="$wine_runtime_dir:/usr/bin:/bin"
 
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/uu-remote-bridge"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge"
@@ -167,8 +231,9 @@ private_display_file="$runtime_dir/private-display"
 console_focus_file="$runtime_dir/console-focus"
 wine_stop_bin="$HOME/.local/libexec/uu-remote-stop-wine-prefix"
 
-if [[ ! -x "$libei_dir/libei.so.1.2.1" ||
-      ! -L "$libei_dir/libei.so.1" ]]; then
+if [[ "$libei_mode" == backport ]] &&
+   { [[ ! -x "$libei_dir/libei.so.1.2.1" ]] ||
+     [[ ! -L "$libei_dir/libei.so.1" ]]; }; then
     printf 'The patched libei keymap-FD backport is missing; reinstall the bridge.\n' >&2
     exit 1
 fi
@@ -466,7 +531,7 @@ cleanup() {
     done
 
     "$wine_stop_bin" \
-        "$WINEPREFIX" /opt/wine-stable/bin/wineserver || true
+        "$WINEPREFIX" "$wineserver_bin" || true
 
     display_lock="/tmp/.X${display_number}-lock"
     display_socket="/tmp/.X11-unix/X${display_number}"
@@ -691,6 +756,21 @@ discover_desktop_session() {
         fi
     done < <(/usr/bin/pgrep -u "$UID" -x gnome-shell | /usr/bin/sort -nr)
 
+    # A deliberately selected X11 display can be relayed through native VNC
+    # even when the desktop is not GNOME and therefore has no gnome-shell
+    # process to inspect. This fallback is limited to the explicit VNC route;
+    # start_desktop_relay still verifies Xauthority before opening x11vnc.
+    if [[ "$desktop_relay" == vnc && "$desktop_target" == :* &&
+          "$manager_session_type" == x11 &&
+          -n "$manager_display" &&
+          "$(normalized_x_display "$manager_display")" == "$(normalized_x_display "$desktop_target")" ]]; then
+        select_desktop_candidate \
+            "$manager_bus" "$manager_display" "$manager_wayland" \
+            "$manager_session_type" "$manager_xauthority" \
+            "" "manager-environment" ""
+        return 0
+    fi
+
     if [[ -n "$fallback_bus" ]]; then
         select_desktop_candidate \
             "$fallback_bus" "$fallback_display" "$fallback_wayland" \
@@ -739,7 +819,7 @@ start_desktop_relay() {
     local selected_desktop
 
     if ! discover_desktop_session; then
-        log "Waiting for logged-in GNOME desktop target '$desktop_target'."
+        log "Waiting for logged-in graphical desktop target '$desktop_target'."
         until discover_desktop_session; do
             sleep 5
         done
@@ -788,6 +868,12 @@ start_desktop_relay() {
             -modtweak \
             -xkb \
             -add_keysyms \
+            -nowf \
+            -nonap \
+            -sb 0 \
+            -wait 10 \
+            -defer 0 \
+            -nowait_bog \
             -seldir recv \
             -autoport 5922 \
             >>"$desktop_vnc_log" 2>&1 &
@@ -829,10 +915,16 @@ start_desktop_relay() {
     desktop_environment=(
         "DBUS_SESSION_BUS_ADDRESS=$desktop_bus"
         "DISPLAY=$desktop_display"
-        "LD_LIBRARY_PATH=$libei_dir"
         "OPENSSL_CONF=/etc/ssl/openssl.cnf"
         "OPENSSL_MODULES=$native_openssl_modules"
     )
+    if [[ "$libei_mode" == backport ]]; then
+        desktop_environment+=("LD_LIBRARY_PATH=$libei_dir")
+    else
+        # Do not let a shell or prior 24.04 installation inject libei 1.2.1
+        # into GNOME Remote Desktop 50.  It needs Ubuntu 26.04's system ABI.
+        desktop_environment+=("LD_LIBRARY_PATH=")
+    fi
     if [[ -n "$desktop_wayland" ]]; then
         desktop_environment+=("WAYLAND_DISPLAY=$desktop_wayland")
     fi
@@ -1034,7 +1126,7 @@ start_wine_clipboard_bridge() {
     /usr/bin/env \
         "UURB_X11_CLIPBOARD_PORT=$x11_clipboard_port" \
         "UURB_X11_CLIPBOARD_TOKEN=$x11_clipboard_token" \
-        /opt/wine-stable/bin/wine "$wine_clipboard_bridge_exe" \
+        "$wine_bin" "$wine_clipboard_bridge_exe" \
         >>"$state_dir/wine-clipboard-bridge.log" 2>&1 &
     wine_clipboard_bridge_pid=$!
     sleep 0.2
@@ -1236,10 +1328,10 @@ fi
 
 /usr/bin/timeout --kill-after=1s 5s \
     /usr/bin/env WINEPREFIX="$WINEPREFIX" \
-    /opt/wine-stable/bin/wineserver -k >/dev/null 2>&1 || true
+    "$wineserver_bin" -k >/dev/null 2>&1 || true
 /usr/bin/timeout --kill-after=1s 5s \
     /usr/bin/env WINEPREFIX="$WINEPREFIX" \
-    /opt/wine-stable/bin/wineserver -w >/dev/null 2>&1 || true
+    "$wineserver_bin" -w >/dev/null 2>&1 || true
 
 "${wine_host_environment[@]}" "$compat_dir/winlogon.exe" \
     >>"$state_dir/winlogon.log" 2>&1 &
@@ -1270,7 +1362,7 @@ if [[ -n "$x11_input_port" ]]; then
         broker_environment+=("UURB_X11_INPUT_SEMANTIC_ONLY=1")
     fi
 fi
-"${broker_environment[@]}" /opt/wine-stable/bin/wine "$input_broker_exe" \
+"${broker_environment[@]}" "$wine_bin" "$input_broker_exe" \
     >>"$state_dir/input-broker.log" 2>&1 &
 input_broker_pid=$!
 
@@ -1281,9 +1373,9 @@ if ! kill -0 "$input_broker_pid" >/dev/null 2>&1; then
 fi
 
 input_bridge_windows_path="$(
-    /opt/wine-stable/bin/winepath -w "$input_bridge_dll"
+    "$winepath_bin" -w "$input_bridge_dll"
 )"
-if ! /opt/wine-stable/bin/wine "$input_injector_exe" \
+if ! "$wine_bin" "$input_injector_exe" \
     "$input_bridge_windows_path" \
     >>"$state_dir/input-injector.log" 2>&1; then
     log 'Could not inject the UU input compatibility bridge.'
@@ -1292,10 +1384,10 @@ fi
 start_wine_clipboard_bridge
 if [[ "$cursor_guard_setting" == on ]]; then
     cursor_guard_windows_path="$(
-        /opt/wine-stable/bin/winepath -w "$cursor_guard_dll"
+        "$winepath_bin" -w "$cursor_guard_dll"
     )"
     rm -f "$cursor_reader_guard_log"
-    if ! /opt/wine-stable/bin/wine "$input_injector_exe" \
+    if ! "$wine_bin" "$input_injector_exe" \
         "$cursor_guard_windows_path" GameViewerServer.exe \
         >>"$state_dir/cursor-reader-guard-injector.log" 2>&1; then
         log 'Could not inject the UU cursor reader guard.'
@@ -1327,7 +1419,7 @@ if [[ "$desktop_relay" == rdp ]]; then
     if [[ "$cursor_guard_setting" == on ]]; then
         freerdp_mouse_options+=(/mouse:relative:off,grab:off)
     fi
-    /opt/wine-stable/bin/wine "$freerdp_exe" \
+    "$wine_bin" "$freerdp_exe" \
         "/v:127.0.0.1:$rdp_port" \
         "/u:$bridge_user" \
         /from-stdin:force \
@@ -1371,7 +1463,7 @@ if [[ "$desktop_relay" == rdp ]]; then
 
     if [[ "$cursor_guard_setting" == on ]]; then
         rm -f "$cursor_guard_log"
-        if ! /opt/wine-stable/bin/wine "$input_injector_exe" \
+        if ! "$wine_bin" "$input_injector_exe" \
             "$cursor_guard_windows_path" sdl-freerdp.exe \
             >>"$state_dir/cursor-guard-injector.log" 2>&1; then
             log 'Could not inject the FreeRDP cursor guard.'
@@ -1406,33 +1498,23 @@ else
     /usr/bin/env \
         DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null \
         /usr/bin/vncviewer \
-        -AllowMainClose=1 \
-        -LogToAddressBook=0 \
         -FullScreen=1 \
-        -FullScreenHint=1 \
-        -EnableToolbar=0 \
-        -AcceptBell=0 \
-        -AudioVolume=0 \
-        -WarnUnencrypted=0 \
-        -VerifyId=0 \
         -Shared=1 \
-        -Scaling=Fit \
-        -DynamicResolution=0 \
-        -GrabKeyboard="$vnc_grab_keyboard_value" \
-        -SendKeyEvents=1 \
-        -SendPointerEvents=1 \
-        -ClientCutText=1 \
-        -ServerCutText=0 \
+        -RemoteResize=0 \
+        -ReconnectOnError=0 \
+        -AlertOnFatalError=0 \
+        -SecurityTypes=None \
+        -AutoSelect=0 \
+        -FullColor=1 \
+        -PreferredEncoding=Raw \
+        -PointerEventInterval=0 \
+        -AlwaysCursor=1 \
+        -CursorType=System \
+        -FullscreenSystemKeys="$vnc_grab_keyboard_value" \
+        -SendClipboard=1 \
+        -AcceptClipboard=0 \
         -SendPrimary=0 \
-        -SendInitialClipboard=0 \
-        -ServerClipboardGraceTime=5000 \
-        -MenuKey= \
-        -UpdateScreenshot=0 \
-        -ShowSplash=0 \
-        -EnableAnalytics=0 \
-        -ShareFiles=0 \
-        -EnableRemotePrinting=0 \
-        -ChangeServerDefaultPrinter=0 \
+        -SetPrimary=0 \
         "127.0.0.1:$desktop_vnc_display" \
         >>"$state_dir/vncviewer-relay.log" 2>&1 &
     vncviewer_pid=$!
@@ -1442,7 +1524,6 @@ else
             {
                 /usr/bin/xdotool search --onlyvisible \
                     --pid "$vncviewer_pid" \
-                    --name '^127\.0\.0\.1:.* - RealVNC Viewer$' \
                     2>/dev/null || true
             } | /usr/bin/tail -n 1
         )"
@@ -1469,10 +1550,10 @@ fi
     >/dev/null 2>&1 || true
 
 bootstrap_account() {
-    /opt/wine-stable/bin/wine "$service_control_exe" \
+    "$wine_bin" "$service_control_exe" \
         GameViewerService 133 \
         >>"$state_dir/service-control.log" 2>&1 || true
-    /opt/wine-stable/bin/wine start /unix "$uu_app_dir/GameViewer.exe" \
+    "$wine_bin" start /unix "$uu_app_dir/GameViewer.exe" \
         >>"$state_dir/client-bootstrap.log" 2>&1 || true
 
     # Keep the layered Wine/Qt management window mapped. Minimizing it while
@@ -1519,7 +1600,7 @@ supervise_server() {
         fi
         if [[ -n "$candidate" && "$candidate" != "$last_pid" ]]; then
             sleep 0.25
-            if /opt/wine-stable/bin/wine "$input_injector_exe" \
+            if "$wine_bin" "$input_injector_exe" \
                 "$input_bridge_windows_path" \
                 >>"$state_dir/input-injector.log" 2>&1; then
                 last_pid="$candidate"
@@ -1533,15 +1614,16 @@ supervise_server() {
         focus_checks=$((focus_checks + 1))
         if ((focus_checks >= 4)); then
             focus_checks=0
-            # RealVNC may replace its initial top-level window when it enters
-            # full-screen mode. Refresh the ID before focusing so an obsolete
-            # startup ID cannot leave UU's management window over the relay.
+            # The native viewer may replace its initial top-level window when
+            # it enters full-screen mode. Refresh the ID before focusing so an
+            # obsolete startup ID cannot leave UU's management window over the
+            # relay. Do not match the vendor-specific window title: Ubuntu
+            # ships TigerVNC, while some older setups used RealVNC.
             if [[ "$desktop_relay" == vnc ]]; then
                 candidate_relay_window_id="$(
                     {
                         /usr/bin/xdotool search --onlyvisible \
                             --pid "$vncviewer_pid" \
-                            --name '^127\.0\.0\.1:.* - RealVNC Viewer$' \
                             2>/dev/null || true
                     } | /usr/bin/tail -n 1
                 )"

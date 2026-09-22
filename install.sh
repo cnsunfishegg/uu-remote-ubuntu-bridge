@@ -6,12 +6,14 @@ umask 077
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/runtime-settings.sh
 source "$repo_dir/scripts/runtime-settings.sh"
+# shellcheck source=scripts/platform-support.sh
+source "$repo_dir/scripts/platform-support.sh"
 bridge_user="${USER:-$(id -un)}"
 wine_prefix="${WINEPREFIX:-$HOME/.local/share/wineprefixes/uu-remote}"
 config_dir="$HOME/.config/uu-remote-bridge"
 environment_file="$config_dir/environment"
-wine_bin='/opt/wine-stable/bin/wine'
-wineserver_bin='/opt/wine-stable/bin/wineserver'
+wine_bin="${UURB_WINE_BIN:-/opt/wine-stable/bin/wine}"
+wineserver_bin="${UURB_WINESERVER_BIN:-/opt/wine-stable/bin/wineserver}"
 grdctl_bin='/usr/bin/grdctl'
 openssl_bin='/usr/bin/openssl'
 python_bin='/usr/bin/python3'
@@ -24,6 +26,8 @@ systemctl_user=(
 uu_dir="$wine_prefix/drive_c/Program Files/Netease/GameViewer"
 uu_bin="$uu_dir/bin"
 release_manifest="${UURB_RELEASE_MANIFEST:-$repo_dir/patches/uu-remote-4.33.0.8907.json}"
+experimental_release_manifest="$repo_dir/experiments/uu-remote-4.41.1.2335.json"
+experimental_wine_prefix="${UURB_EXPERIMENTAL_WINE_PREFIX:-$HOME/.local/share/wineprefixes/uu-remote-4.41-experimental}"
 installed_manifest="$wine_prefix/compat/release-manifest.json"
 runtime_digest_file="$wine_prefix/compat/.runtime-source-sha256"
 server_exe=''
@@ -68,6 +72,30 @@ saved_cursor_guard="$(saved_setting UURB_CURSOR_GUARD)"
 saved_cursor_size="$(saved_setting UURB_CURSOR_SIZE)"
 saved_console_vnc_port="$(saved_setting UURB_CONSOLE_VNC_PORT)"
 saved_console_web_port="$(saved_setting UURB_CONSOLE_WEB_PORT)"
+saved_wine_prefix="$(saved_setting UURB_WINEPREFIX)"
+saved_wine_bin="$(saved_setting UURB_WINE_BIN)"
+saved_wineserver_bin="$(saved_setting UURB_WINESERVER_BIN)"
+saved_uu_audio="$(saved_setting UURB_UU_AUDIO)"
+if [[ -z "${WINEPREFIX:-}" && -n "$saved_wine_prefix" ]]; then
+    wine_prefix="$saved_wine_prefix"
+fi
+if [[ -z "${UURB_WINE_BIN:-}" && -n "$saved_wine_bin" ]]; then
+    wine_bin="$saved_wine_bin"
+fi
+if [[ -z "${UURB_WINESERVER_BIN:-}" && -n "$saved_wineserver_bin" ]]; then
+    wineserver_bin="$saved_wineserver_bin"
+fi
+# The saved prefix is deliberately resolved before any path derived from it.
+# This lets an isolated, signed-in Wine prefix be promoted without copying
+# account files into a different prefix.
+uu_dir="$wine_prefix/drive_c/Program Files/Netease/GameViewer"
+uu_bin="$uu_dir/bin"
+installed_manifest="$wine_prefix/compat/release-manifest.json"
+runtime_digest_file="$wine_prefix/compat/.runtime-source-sha256"
+freerdp_install="$wine_prefix/drive_c/Program Files/FreeRDP"
+libei_install="$wine_prefix/compat/libei"
+terminal_proxy_install="$uu_bin/powershell.exe"
+installed_terminal_proxy="$wine_prefix/compat/uu-terminal-proxy.exe"
 rdp_port="${UURB_RDP_PORT:-${saved_rdp_port:-3390}}"
 resolution="${UURB_RESOLUTION:-${saved_resolution:-1920x1080}}"
 follow_desktop_resolution="${UURB_FOLLOW_DESKTOP_RESOLUTION:-${saved_follow_desktop_resolution:-off}}"
@@ -87,6 +115,17 @@ cursor_guard="${UURB_CURSOR_GUARD:-${saved_cursor_guard:-off}}"
 cursor_size="${UURB_CURSOR_SIZE:-${saved_cursor_size:-auto}}"
 console_vnc_port="${UURB_CONSOLE_VNC_PORT:-${saved_console_vnc_port:-5920}}"
 console_web_port="${UURB_CONSOLE_WEB_PORT:-${saved_console_web_port:-6080}}"
+if [[ -n "${UURB_UU_AUDIO:-}" ]]; then
+    uu_audio="${UURB_UU_AUDIO}"
+elif [[ -n "$saved_uu_audio" ]]; then
+    uu_audio="$saved_uu_audio"
+elif [[ -f "$environment_file" ]]; then
+    # Do not silently change the behavior of an existing installation.
+    uu_audio=system
+else
+    # A fresh bridge must never expose the physical microphone or speakers.
+    uu_audio=off
+fi
 uu_installer=''
 skip_packages=false
 skip_account_login=false
@@ -96,6 +135,10 @@ unattended=false
 automatic_updates=false
 upgrade_existing=false
 prefix_only=false
+experimental_441=false
+release_manifest_explicit=false
+manifest_tool_flags=()
+windows_rdp_runtime=false
 
 usage() {
     cat <<'EOF'
@@ -104,6 +147,8 @@ usage: ./install.sh [options]
   --uu-installer PATH    use a previously downloaded audited installer
   --release-manifest PATH
                          use an approved release manifest
+  --experimental-4-41   prepare only the isolated UU 4.41 test prefix; requires
+                         --prefix-only, --skip-packages, and --uu-installer
   --rdp-port PORT        local GNOME RDP relay port (default: 3390)
   --resolution WxH       relay resolution (default: 1920x1080)
   --follow-desktop-resolution off|on
@@ -142,6 +187,8 @@ usage: ./install.sh [options]
                          (default: off)
   --cursor-size auto|N   with the cursor guard on, match the desktop cursor or
                          use a fixed size from 24 through 128 pixels
+  --uu-audio off|system  keep UU in a private silent audio namespace (default
+                         for a new installation), or allow system audio
   --console-vnc-port N   localhost VNC sidecar port (default: 5920)
   --console-web-port N   localhost noVNC app port (default: 6080)
   --skip-packages        do not install Ubuntu/Wine package dependencies
@@ -165,7 +212,12 @@ while (($#)); do
             ;;
         --release-manifest)
             release_manifest="${2:?--release-manifest requires a path}"
+            release_manifest_explicit=true
             shift 2
+            ;;
+        --experimental-4-41)
+            experimental_441=true
+            shift
             ;;
         --rdp-port)
             rdp_port="${2:?--rdp-port requires a port}"
@@ -227,6 +279,10 @@ while (($#)); do
             cursor_size="${2:?--cursor-size requires auto or a pixel size}"
             shift 2
             ;;
+        --uu-audio)
+            uu_audio="${2:?--uu-audio requires off or system}"
+            shift 2
+            ;;
         --console-vnc-port)
             console_vnc_port="${2:?--console-vnc-port requires a port}"
             shift 2
@@ -281,6 +337,12 @@ if [[ $EUID -eq 0 ]]; then
     printf 'Run this installer as the desktop user, not as root.\n' >&2
     exit 1
 fi
+if [[ "$wine_prefix" != /* || "$wine_bin" != /* ||
+      "$wineserver_bin" != /* || ! -x "$wine_bin" ||
+      ! -x "$wineserver_bin" ]]; then
+    printf 'Wine prefix, wine, and wineserver must be existing absolute paths.\n' >&2
+    exit 2
+fi
 if [[ "$(uname -m)" != x86_64 ]]; then
     printf 'Only x86_64 Ubuntu is currently supported.\n' >&2
     exit 1
@@ -291,11 +353,13 @@ if [[ ! -r /etc/os-release ]]; then
 fi
 # shellcheck source=/dev/null
 source /etc/os-release
-if [[ "${ID:-}" != ubuntu || "${VERSION_ID:-}" != 24.04 ]]; then
-    printf 'Only Ubuntu 24.04 is currently supported; detected %s %s.\n' \
+if ! uurb_select_platform "${ID:-}" "${VERSION_ID:-}"; then
+    printf 'Only Ubuntu 24.04 and the Ubuntu 26.04 preview are supported; detected %s %s.\n' \
         "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
     exit 1
 fi
+platform="$UURB_PLATFORM"
+libei_mode="$UURB_LIBEI_MODE"
 if [[ ! "$rdp_port" =~ ^[1-9][0-9]{0,4}$ ]] ||
    ((rdp_port < 1024 || rdp_port > 65535)); then
     printf 'The RDP port must be an integer from 1024 through 65535.\n' >&2
@@ -388,6 +452,10 @@ if [[ "$cursor_guard" != off && "$cursor_guard" != on ]]; then
     printf 'The cursor guard must be off or on.\n' >&2
     exit 2
 fi
+if [[ "$uu_audio" != off && "$uu_audio" != system ]]; then
+    printf 'UU audio must be off or system.\n' >&2
+    exit 2
+fi
 if [[ "$cursor_size" != auto ]]; then
     if [[ ! "$cursor_size" =~ ^[0-9]{1,3}$ ]]; then
         printf 'The cursor size must be auto or an integer from 24 through 128.\n' >&2
@@ -428,6 +496,39 @@ if [[ "$prefix_only" == true &&
     printf -- '--prefix-only cannot configure unattended or automatic updates.\n' >&2
     exit 2
 fi
+if [[ "$experimental_441" == true ]]; then
+    if [[ "$prefix_only" != true ]]; then
+        printf -- '--experimental-4-41 requires --prefix-only.\n' >&2
+        exit 2
+    fi
+    if [[ "$skip_packages" != true ]]; then
+        printf -- '--experimental-4-41 requires --skip-packages.\n' >&2
+        exit 2
+    fi
+    if [[ -z "$uu_installer" ]]; then
+        printf -- '--experimental-4-41 requires --uu-installer with the audited local file.\n' >&2
+        exit 2
+    fi
+    if [[ "$upgrade_existing" == true ]]; then
+        printf -- '--experimental-4-41 cannot be combined with --upgrade-existing.\n' >&2
+        exit 2
+    fi
+    if [[ "$release_manifest_explicit" == true ||
+          -n "${UURB_RELEASE_MANIFEST:-}" ]]; then
+        printf -- '--experimental-4-41 selects its own fixed manifest; do not set --release-manifest or UURB_RELEASE_MANIFEST.\n' >&2
+        exit 2
+    fi
+    if [[ "$wine_prefix" != "$experimental_wine_prefix" ]]; then
+        printf -- '--experimental-4-41 requires the isolated WINEPREFIX %s.\n' \
+            "$experimental_wine_prefix" >&2
+        exit 2
+    fi
+    release_manifest="$experimental_release_manifest"
+    manifest_tool_flags=(--allow-experimental)
+fi
+if [[ "$experimental_441" == false && "$desktop_relay" == rdp ]]; then
+    windows_rdp_runtime=true
+fi
 if [[ "$prefix_only" == false ]]; then
     user_bus="${XDG_RUNTIME_DIR:-/run/user/$UID}/bus"
     if [[ ! -S "$user_bus" ]]; then
@@ -444,6 +545,8 @@ fi
 install_winehq() {
     local codename
     local temporary
+    local winehq_keyring
+    local winehq_sources
 
     if [[ -x "$wine_bin" ]]; then
         return
@@ -452,17 +555,26 @@ install_winehq() {
     source /etc/os-release
     codename="${VERSION_CODENAME:?Ubuntu codename is unavailable}"
     temporary="$(mktemp -d)"
+    winehq_keyring="$temporary/winehq-archive.gpg"
+    winehq_sources="$temporary/winehq-$codename.sources"
 
     sudo dpkg --add-architecture i386
     curl -fsSL https://dl.winehq.org/wine-builds/winehq.key \
         -o "$temporary/winehq.key"
     curl -fsSL \
         "https://dl.winehq.org/wine-builds/ubuntu/dists/$codename/winehq-$codename.sources" \
-        -o "$temporary/winehq-$codename.sources"
+        -o "$winehq_sources"
+    # Ubuntu 26.04 APT ignores a binary OpenPGP key whose filename ends in
+    # .key.  Keep the key in APT's documented binary-keyring format and make
+    # the downloaded source stanza point at that exact file.
+    gpg --dearmor --yes --output "$winehq_keyring" "$temporary/winehq.key"
+    sed -i \
+        's|/etc/apt/keyrings/winehq-archive\.key|/etc/apt/keyrings/winehq-archive.gpg|g' \
+        "$winehq_sources"
     sudo install -d -m 0755 /etc/apt/keyrings
-    sudo install -m 0644 "$temporary/winehq.key" \
-        /etc/apt/keyrings/winehq-archive.key
-    sudo install -m 0644 "$temporary/winehq-$codename.sources" \
+    sudo install -m 0644 "$winehq_keyring" \
+        /etc/apt/keyrings/winehq-archive.gpg
+    sudo install -m 0644 "$winehq_sources" \
         "/etc/apt/sources.list.d/winehq-$codename.sources"
     sudo apt-get update
     sudo apt-get install -y --install-recommends winehq-stable
@@ -475,7 +587,7 @@ install_packages() {
         acl aria2 binutils ca-certificates cmake crudini curl freerdp3-x11 \
         gcc \
         gcc-mingw-w64-x86-64 \
-        git gnome-remote-desktop iproute2 jq libsecret-tools libx11-6 \
+        git gnome-remote-desktop gpg iproute2 jq libsecret-tools libx11-6 \
         libxml2-utils libxtst6 meson novnc \
         ninja-build openbox openssl p7zip-full patch python3 python3-attr \
         python3-gi python3-jinja2 tar tigervnc-viewer websockify \
@@ -531,6 +643,10 @@ if [[ "$skip_packages" == false ]]; then
     install_packages
 fi
 
+if [[ "$libei_mode" == system ]] && ! uurb_require_system_libei; then
+    exit 1
+fi
+
 for command in curl meson ninja patch readelf sha256sum /usr/bin/systemctl \
     timeout \
     "$grdctl_bin" "$openssl_bin" "$python_bin" "$secret_tool_bin" \
@@ -549,7 +665,7 @@ done
 release_manifest="$(realpath "$release_manifest")"
 manifest_field() {
     "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" field "$1" \
-        --manifest "$release_manifest"
+        --manifest "$release_manifest" "${manifest_tool_flags[@]}"
 }
 
 uu_download_url="$(manifest_field installer.url)"
@@ -563,6 +679,14 @@ devcon_exe="$uu_bin/drivers/devcon.exe"
 devcon_backup="$devcon_exe.uu-original"
 case "$release_version" in
     4.33.0.8907|4.34.0.8979|4.39.1.1375|4.39.2.1561)
+        devcon_sha256='46731d6ea59dd9b63ad641c79646bb5ff64e1b877a1226536e3fe34d1ab4ee10'
+        ;;
+    4.41.1.2335)
+        if [[ "$experimental_441" != true ]]; then
+            printf 'UU %s is available only through --experimental-4-41.\n' \
+                "$release_version" >&2
+            exit 1
+        fi
         devcon_sha256='46731d6ea59dd9b63ad641c79646bb5ff64e1b877a1226536e3fe34d1ab4ee10'
         ;;
     *)
@@ -636,17 +760,35 @@ if [[ ! -f "$uu_dir/GameViewer.exe" || "$upgrade_existing" == true ]]; then
             printf 'Cannot upgrade without the currently installed release manifest.\n' >&2
             exit 1
         fi
+        previous_manifest_flags=()
+        if ! "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" field version \
+            --manifest "$installed_manifest" >/dev/null 2>&1; then
+            # The one supported migration path out of the isolated 4.41
+            # sign-in experiment is to an approved bridge release.  Require
+            # byte-identical manifest provenance; never accept an arbitrary
+            # experimental manifest from a prefix.
+            if [[ -f "$experimental_release_manifest" ]] &&
+               /usr/bin/cmp -s "$installed_manifest" \
+                   "$experimental_release_manifest"; then
+                previous_manifest_flags=(--allow-experimental)
+            else
+                printf 'Cannot upgrade an unapproved installed release manifest.\n' >&2
+                exit 1
+            fi
+        fi
         previous_version="$(
             "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" field version \
-                --manifest "$installed_manifest"
+                --manifest "$installed_manifest" "${previous_manifest_flags[@]}"
         )"
         previous_server_filename="$(
             "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" field \
-                server.filename --manifest "$installed_manifest"
+                server.filename --manifest "$installed_manifest" \
+                "${previous_manifest_flags[@]}"
         )"
         previous_healthd_filename="$(
             "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" field \
-                health_monitor.filename --manifest "$installed_manifest"
+                health_monitor.filename --manifest "$installed_manifest" \
+                "${previous_manifest_flags[@]}"
         )"
         previous_backup_dir="$wine_prefix/compat/release-backups/$previous_version"
         mkdir -p "$previous_backup_dir"
@@ -670,13 +812,23 @@ if [[ ! -f "$server_exe" || ! -f "$healthd_exe" ]]; then
     exit 1
 fi
 "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" verify "$server_exe" \
-    --manifest "$release_manifest" >/dev/null
+    --manifest "$release_manifest" "${manifest_tool_flags[@]}" >/dev/null
 
 "$repo_dir/scripts/build-compat.sh" "$compat_build"
-"$repo_dir/scripts/build-winpr.sh" "$freerdp_build"
-"$repo_dir/scripts/build-libei.sh" "$libei_build"
+if [[ "$windows_rdp_runtime" == true ]]; then
+    "$repo_dir/scripts/build-winpr.sh" "$freerdp_build"
+fi
+if [[ "$libei_mode" == backport ]]; then
+    "$repo_dir/scripts/build-libei.sh" "$libei_build"
+fi
 
-mkdir -p "$wine_prefix/compat" "$freerdp_install" "$libei_install"
+mkdir -p "$wine_prefix/compat"
+if [[ "$windows_rdp_runtime" == true ]]; then
+    mkdir -p "$freerdp_install"
+fi
+if [[ "$libei_mode" == backport ]]; then
+    mkdir -p "$libei_install"
+fi
 if [[ -e "$terminal_proxy_install" ]] &&
    { [[ ! -f "$installed_terminal_proxy" ]] ||
      ! /usr/bin/cmp -s "$terminal_proxy_install" \
@@ -708,16 +860,22 @@ install -m 0755 "$compat_build/winlogon.exe" \
     "$wine_prefix/compat/winlogon.exe"
 install -m 0755 "$compat_build/winlogon.exe.so" \
     "$wine_prefix/compat/winlogon.exe.so"
-install -m 0755 "$freerdp_build/"*.dll "$freerdp_build/sdl-freerdp.exe" \
-    "$freerdp_install/"
-install -m 0755 "$compat_build/winpr-sspi-shim.dll" \
-    "$freerdp_install/winpr-sspi-shim.dll"
-install -m 0755 "$libei_build/libei.so.1.2.1" \
-    "$libei_install/libei.so.1.2.1"
-ln -sfn libei.so.1.2.1 "$libei_install/libei.so.1"
-mkdir -p "$freerdp_install/ossl-modules"
-install -m 0755 "$freerdp_build/ossl-modules/legacy.dll" \
-    "$freerdp_install/ossl-modules/legacy.dll"
+if [[ "$windows_rdp_runtime" == true ]]; then
+    install -m 0755 "$freerdp_build/"*.dll "$freerdp_build/sdl-freerdp.exe" \
+        "$freerdp_install/"
+    install -m 0755 "$compat_build/winpr-sspi-shim.dll" \
+        "$freerdp_install/winpr-sspi-shim.dll"
+fi
+if [[ "$libei_mode" == backport ]]; then
+    install -m 0755 "$libei_build/libei.so.1.2.1" \
+        "$libei_install/libei.so.1.2.1"
+    ln -sfn libei.so.1.2.1 "$libei_install/libei.so.1"
+fi
+if [[ "$windows_rdp_runtime" == true ]]; then
+    mkdir -p "$freerdp_install/ossl-modules"
+    install -m 0755 "$freerdp_build/ossl-modules/legacy.dll" \
+        "$freerdp_install/ossl-modules/legacy.dll"
+fi
 runtime_digest_tmp="$(mktemp "$wine_prefix/compat/.runtime-source-sha256.XXXXXX")"
 "$repo_dir/scripts/runtime-source-digest" >"$runtime_digest_tmp"
 chmod 0644 "$runtime_digest_tmp"
@@ -758,10 +916,18 @@ elif [[ ! -f "$devcon_backup" ]] || \
 fi
 
 "$python_bin" "$repo_dir/scripts/patch-gameviewer.py" patch "$server_exe" \
-    --manifest "$installed_manifest"
-"$repo_dir/scripts/clean-wine-device-registry" "$wine_prefix"
+    --manifest "$installed_manifest" "${manifest_tool_flags[@]}"
+if [[ "$experimental_441" == false ]]; then
+    WINE_BIN="$wine_bin" WINESERVER_BIN="$wineserver_bin" \
+        "$repo_dir/scripts/clean-wine-device-registry" "$wine_prefix"
+fi
 
 if [[ "$prefix_only" == true ]]; then
+    if [[ "$experimental_441" == true ]]; then
+        printf '\nPrepared isolated experimental UU 4.41 in %s. No RDP, user service, automatic startup, account login, or unattended mode was changed.\n' \
+            "$wine_prefix"
+        exit 0
+    fi
     printf '\nPrepared approved UU release in %s without changing RDP configuration or opening the login UI.\n' \
         "$wine_prefix"
     exit 0
@@ -772,7 +938,13 @@ install -d -m 0755 \
     "$HOME/.config/systemd/user" "$HOME/.local/share/applications"
 install -d -m 0700 "$config_dir"
 environment_tmp="$(mktemp "$config_dir/.environment.XXXXXX")"
-printf 'UURB_RDP_PORT=%s\n' "$rdp_port" >"$environment_tmp"
+printf 'UURB_PLATFORM=%s\n' "$platform" >"$environment_tmp"
+printf 'UURB_LIBEI_MODE=%s\n' "$libei_mode" >>"$environment_tmp"
+printf 'UURB_WINEPREFIX=%s\n' "$wine_prefix" >>"$environment_tmp"
+printf 'UURB_WINE_BIN=%s\n' "$wine_bin" >>"$environment_tmp"
+printf 'UURB_WINESERVER_BIN=%s\n' "$wineserver_bin" >>"$environment_tmp"
+printf 'UURB_UU_AUDIO=%s\n' "$uu_audio" >>"$environment_tmp"
+printf 'UURB_RDP_PORT=%s\n' "$rdp_port" >>"$environment_tmp"
 printf 'UURB_RESOLUTION=%s\n' "$resolution" >>"$environment_tmp"
 printf 'UURB_FOLLOW_DESKTOP_RESOLUTION=%s\n' \
     "$follow_desktop_resolution" >>"$environment_tmp"
@@ -806,6 +978,18 @@ printf 'UURB_CONSOLE_WEB_PORT=%s\n' \
     "$console_web_port" >>"$environment_tmp"
 chmod 0600 "$environment_tmp"
 mv "$environment_tmp" "$environment_file"
+audio_alsa_config="$config_dir/alsa-null.conf"
+if [[ "$uu_audio" == off ]]; then
+    install -m 0600 "$repo_dir/config/alsa-null.conf" "$audio_alsa_config"
+    WINEPREFIX="$wine_prefix" WINEDEBUG=-all \
+        "$wine_bin" reg add 'HKCU\Software\Wine\Drivers' \
+        /v Audio /t REG_SZ /d alsa /f >/dev/null
+else
+    WINEPREFIX="$wine_prefix" WINEDEBUG=-all \
+        "$wine_bin" reg delete 'HKCU\Software\Wine\Drivers' \
+        /v Audio /f >/dev/null 2>&1 || true
+fi
+stop_wine_prefix
 install -m 0755 "$repo_dir/scripts/uu-remote-bridge" \
     "$HOME/.local/bin/uu-remote-bridge"
 install -m 0755 "$repo_dir/scripts/uu-shared-physical-vnc" \
@@ -879,26 +1063,26 @@ fi
 rdp_password="$("$secret_tool_bin" lookup service uu-desktop-bridge \
     username "$bridge_user" || true)"
 if [[ -z "$rdp_password" ]]; then
-    while true; do
-        read -rsp 'Password for the local GNOME RDP relay: ' rdp_password
-        printf '\n'
-        read -rsp 'Repeat the relay password: ' confirmation
-        printf '\n'
-        if [[ -n "$rdp_password" && "$rdp_password" == "$confirmation" ]]; then
-            unset confirmation
-            break
-        fi
-        printf 'Passwords did not match or were empty.\n' >&2
-    done
+    # This credential is only for the loopback relay and the local console;
+    # it is not the UU account password and is never displayed.  A fresh,
+    # stored random value removes an unnecessary setup interruption while
+    # keeping the listener authenticated.
+    rdp_password="$("$openssl_bin" rand -hex 32)"
+    if [[ -z "$rdp_password" ]]; then
+        printf 'Could not generate the private local relay credential.\n' >&2
+        exit 1
+    fi
 fi
 
-"$grdctl_bin" rdp set-port "$rdp_port"
-"$grdctl_bin" rdp set-tls-cert "$tls_cert"
-"$grdctl_bin" rdp set-tls-key "$tls_key"
-"$grdctl_bin" rdp set-credentials "$bridge_user" "$rdp_password"
-"$grdctl_bin" rdp disable-view-only
-"$grdctl_bin" rdp disable-port-negotiation
-"$grdctl_bin" rdp enable
+if [[ "$desktop_relay" == rdp ]]; then
+    "$grdctl_bin" rdp set-port "$rdp_port"
+    "$grdctl_bin" rdp set-tls-cert "$tls_cert"
+    "$grdctl_bin" rdp set-tls-key "$tls_key"
+    "$grdctl_bin" rdp set-credentials "$bridge_user" "$rdp_password"
+    "$grdctl_bin" rdp disable-view-only
+    "$grdctl_bin" rdp disable-port-negotiation
+    "$grdctl_bin" rdp enable
+fi
 printf '%s' "$rdp_password" | "$secret_tool_bin" store \
     --label='UU Remote Ubuntu bridge RDP credential' \
     service uu-desktop-bridge username "$bridge_user"

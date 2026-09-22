@@ -126,6 +126,11 @@ from the live user-owned `gnome-shell` process and starts GNOME Remote Desktop
 on that exact bus. This also works for a normal Wayland login and prevents an
 idle daemon on the wrong bus from being mistaken for a working relay.
 
+For the native VNC profile only, an explicit `:N` X11 target also accepts the
+logged-in user manager environment when no `gnome-shell` process exists. This
+covers other X11 desktop shells without guessing a desktop: the selected display
+and its Xauthority must still pass the x11vnc access check.
+
 The native GNOME daemon receives Linux's OpenSSL configuration and a provider
 directory discovered from the host `openssl` executable; the Windows FreeRDP
 client receives its separate Wine path. Keeping those environments separate
@@ -305,15 +310,20 @@ wrapper crosses `runuser`/PAM, which may otherwise reset the soft limit to
 starting. The relay is rebuilt at a persistent default threshold of 4096
 before `libei` can lose keyboard injection to `EMFILE`.
 
-The primary repair is an isolated backport of upstream libei commit
-`ee27dd5c92e4e9496a36ca2d4112049fe02d2269`. Ubuntu 24.04's libei 1.2.1
-duplicated each keymap descriptor but did not close the descriptor received
-from the protocol demarshaller. The installer builds 1.2.1 from a pinned,
+The primary repair for Ubuntu 24.04 is an isolated backport of upstream libei
+commit `ee27dd5c92e4e9496a36ca2d4112049fe02d2269`. Its libei 1.2.1 duplicated
+each keymap descriptor but did not close the descriptor received from the
+protocol demarshaller. The installer builds 1.2.1 from a pinned,
 hash-verified archive with that one-line close and places it inside the bridge
 prefix. Only the supervised GNOME RDP process receives its directory through
-`LD_LIBRARY_PATH`; Ubuntu's system library is not replaced. The limit and
-restart threshold remain independent containment if another descriptor leak
-appears.
+`LD_LIBRARY_PATH`; Ubuntu's system library is not replaced.
+
+Ubuntu 26.04 uses GNOME Remote Desktop 50, which requires a newer libei ABI.
+The bridge therefore never injects the 1.2.1 library into that process. Its
+explicit preview path checks for Ubuntu's `libei1` 1.5.0 or newer, clears any
+inherited `LD_LIBRARY_PATH`, and relies on the upstream fix already present in
+that system library. The limit and restart threshold remain independent
+containment if another descriptor leak appears.
 
 Verification accepts either the ordinary systemd user unit or the known
 system application-profile unit. A profile may place the relay in a private

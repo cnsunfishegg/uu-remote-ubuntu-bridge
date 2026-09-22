@@ -26,6 +26,16 @@
 
 </div>
 
+> **About this fork:** This repository is based on
+> [Lachlan Chen's UU Remote Ubuntu Bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge).
+> The Wine/Xvfb, RDP/VNC relay, input-broker, unattended-startup, and update
+> architecture comes from the upstream project. This fork contains
+> work-in-progress, host-specific changes to input routing, silent-audio
+> isolation, the TigerVNC relay, and an Ubuntu 26.04 preview. Ubuntu 26.04 and
+> UU 4.41 are **experimental**, not broadly validated releases. The original
+> MIT license and author attribution are preserved; the documentation below
+> is largely inherited from upstream unless a fork-specific change is noted.
+
 An experimental compatibility bridge that runs the official Windows UU client
 in an isolated Wine prefix, presents the real GNOME desktop through a
 local RDP relay, and makes mouse and keyboard control work normally.
@@ -48,9 +58,13 @@ the official Windows client and verifies the complete installer hash. Do not
 install an unverified `.deb`, `.rpm`, or AppImage from a look-alike download
 site.
 
-The supported host is x86-64 Ubuntu 24.04 with a logged-in GNOME 46 desktop
-(physical, Wayland, Xorg, or XRDP). The installer checks this boundary and
-fails before making partial changes on an unsupported OS or architecture.
+The validated baseline is x86-64 Ubuntu 24.04 with a logged-in GNOME 46
+desktop (physical, Wayland, Xorg, or XRDP). This fork also has an explicit
+Ubuntu 26.04 preview path for GNOME 50: it checks the newer system `libei`
+instead of loading the 24.04 compatibility library. Read the
+[26.04 port notes](docs/ubuntu-26-04-port.md) before treating that path as a
+daily-use deployment. The installer rejects other OS releases and
+architectures before making partial changes.
 
 Using—or needing—another Ubuntu release, desktop/session, CPU architecture,
 UU version, or controller platform? [Share one compatibility report or
@@ -145,8 +159,11 @@ was active before the attempted upgrade.
 real working desktop is an existing XRDP session, use
 `--desktop-target xrdp`; the bridge follows the active `xrdp-sesman` session
 even if its X display number changes after reboot. `physical` selects the
-seat-attached GDM desktop, while `:N` selects one exact X display. An explicit
-target waits when unavailable and never falls back to a different desktop, so
+seat-attached GDM desktop, while `:N` selects one exact X display. For the
+native VNC relay, an explicit X11 target can also use the logged-in user
+manager environment when the desktop is not GNOME; Xauthority is still checked
+before it is shared. An explicit target waits when unavailable and never falls
+back to a different desktop, so
 UU cannot silently open an empty physical desktop while XRDP windows remain
 elsewhere.
 
@@ -298,9 +315,9 @@ mapping follows the host layout.
 
 The VNC desktop relay explicitly permits clipboard updates from UU's private
 desktop to Ubuntu while blocking the reverse target-to-private direction.
-`SendPrimary=0` avoids stale selected text, and the receive-only server plus
-`ServerCutText=0` prevent semantic target text from feeding back into the VNC
-viewer and being pasted again.
+Ubuntu's TigerVNC viewer uses `SendClipboard=1`, `AcceptClipboard=0`,
+`SendPrimary=0`, and `SetPrimary=0`; its receive-only x11vnc peer provides
+the same one-way boundary without depending on a proprietary viewer.
 
 Some UU controllers publish received desktop text only to GameViewer's Win32
 clipboard under Wine, without creating an X11 selection on the private
@@ -314,7 +331,7 @@ as the new owners of both `CLIPBOARD` and `PRIMARY` on the selected physical
 X11 desktop. It never reads the host clipboard or emits a paste key. Images,
 rich text, and files are deliberately ignored. Socket operations have bounded
 deadlines, and either helper exiting causes the service to clean up and
-restart. This preserves `ServerCutText=0` and the receive-only VNC boundary
+restart. This preserves `AcceptClipboard=0` and the receive-only VNC boundary
 while allowing controller-to-Ubuntu text paste.
 See [semantic phone text and clipboard relay](docs/semantic-text-and-clipboard.md).
 
@@ -383,10 +400,12 @@ the new route; no additional watcher or service is installed. Use
 `--network-interface all` to remove the restriction.
 
 Ubuntu 24.04's libei 1.2.1 leaks the received keyboard-keymap descriptor after
-duplicating it. The installer builds the exact upstream one-line fix from a
-hash-verified 1.2.1 archive and loads that library only into this bridge's
-GNOME RDP child. A raised child limit and persistent 4096-descriptor relay
-guard remain as defense in depth:
+duplicating it. For that release, the installer builds the exact upstream
+one-line fix from a hash-verified 1.2.1 archive and loads it only into this
+bridge's GNOME RDP child. Ubuntu 26.04's GNOME 50 requires a newer libei ABI,
+so the preview path verifies and uses its system `libei1` 1.5.0 or newer; that
+release already contains the upstream close-FD fix. A raised child limit and
+persistent 4096-descriptor relay guard remain as defense in depth:
 
 ```bash
 ./install.sh --skip-packages --skip-account-login \

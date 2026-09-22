@@ -1188,6 +1188,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
         write_log(line);
         flush_log();
     }
+    if (x11_input_configured) {
+        write_log(connect_x11_input()
+                      ? "UU X11 input transport preconnected\r\n"
+                      : "UU X11 input transport will connect on demand\r\n");
+        flush_log();
+    }
 
     for (;;) {
         HANDLE pipe = CreateNamedPipeW(

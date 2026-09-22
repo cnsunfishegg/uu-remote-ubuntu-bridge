@@ -40,6 +40,7 @@ typedef Window (*x_get_selection_owner_fn)(Display *, Atom);
 typedef int (*x_default_screen_fn)(Display *);
 typedef int (*x_display_dimension_fn)(Display *, int);
 typedef KeyCode (*x_keysym_to_keycode_fn)(Display *, KeySym);
+typedef KeySym (*x_keycode_to_keysym_fn)(Display *, KeyCode, int);
 typedef Bool (*xtest_query_extension_fn)(Display *, int *, int *, int *, int *);
 typedef Bool (*xtest_fake_key_event_fn)(Display *, unsigned int, Bool,
                                         unsigned long);
@@ -62,6 +63,7 @@ typedef struct x11_api {
     x_display_dimension_fn display_width;
     x_display_dimension_fn display_height;
     x_keysym_to_keycode_fn keysym_to_keycode;
+    x_keycode_to_keysym_fn keycode_to_keysym;
     xtest_query_extension_fn query_extension;
     xtest_fake_key_event_fn fake_key_event;
     xtest_fake_button_event_fn fake_button_event;
@@ -817,6 +819,22 @@ static KeySym extended_scan_to_keysym(unsigned int scan)
     }
 }
 
+static unsigned int primary_keysym_to_keycode(const x11_api *api,
+                                              Display *display,
+                                              KeySym keysym)
+{
+    unsigned int keycode;
+
+    /* XKeysymToKeycode may return the keypad key when an extended navigation
+     * keysym is also available there (for example XK_Left -> KP_Left). Prefer
+     * a key whose unshifted primary symbol is the requested extended key. */
+    for (keycode = 8; keycode < 256; keycode++) {
+        if (api->keycode_to_keysym(display, (KeyCode)keycode, 0) == keysym)
+            return keycode;
+    }
+    return api->keysym_to_keycode(display, keysym);
+}
+
 static unsigned int event_to_x_keycode(const x11_api *api, Display *display,
                                        const uurb_x11_input_event *event)
 {
@@ -829,7 +847,7 @@ static unsigned int event_to_x_keycode(const x11_api *api, Display *display,
 
         if (keysym == 0)
             return 0;
-        return api->keysym_to_keycode(display, keysym);
+        return primary_keysym_to_keycode(api, display, keysym);
     }
     if (scan > 247U)
         return 0;
@@ -1015,6 +1033,8 @@ static bool load_x11_api(x11_api *api)
         api->x11_library, "XDisplayHeight");
     api->keysym_to_keycode = (x_keysym_to_keycode_fn)dlsym(
         api->x11_library, "XKeysymToKeycode");
+    api->keycode_to_keysym = (x_keycode_to_keysym_fn)dlsym(
+        api->x11_library, "XKeycodeToKeysym");
     api->query_extension = (xtest_query_extension_fn)dlsym(
         api->xtst_library, "XTestQueryExtension");
     api->fake_key_event = (xtest_fake_key_event_fn)dlsym(
@@ -1030,6 +1050,7 @@ static bool load_x11_api(x11_api *api)
         !api->intern_atom || !api->get_selection_owner ||
         !api->default_screen || !api->display_width ||
         !api->display_height || !api->keysym_to_keycode ||
+        !api->keycode_to_keysym ||
         !api->query_extension || !api->fake_key_event ||
         !api->fake_button_event || !api->fake_motion_event ||
         !api->fake_relative_motion_event)

@@ -16,6 +16,7 @@ runtime_files=(
     scripts/compare-pe-normalized.py
     scripts/configure-unattended.sh
     scripts/inspect-wine-device-registry.py
+    scripts/platform-support.sh
     scripts/runtime-settings.sh
     scripts/runtime-source-digest
     scripts/stop-wine-prefix
@@ -27,6 +28,7 @@ runtime_files=(
     scripts/uu-link
     scripts/uu-remote
     scripts/uu-remote-bridge
+    config/alsa-null.conf
     scripts/uu-shared-physical-vnc
     scripts/uu-remote-console
     scripts/upgrade-uu-remote.sh

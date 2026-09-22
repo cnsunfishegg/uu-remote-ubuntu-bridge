@@ -4,7 +4,6 @@ set -Eeuo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 bridge_user="${USER:-$(id -un)}"
-wine_prefix="${WINEPREFIX:-$HOME/.local/share/wineprefixes/uu-remote}"
 environment_file="$HOME/.config/uu-remote-bridge/environment"
 saved_setting() {
     local name="$1"
@@ -13,6 +12,9 @@ saved_setting() {
     /usr/bin/sed -n "s/^${name}=//p" "$environment_file" | \
         /usr/bin/tail -n 1
 }
+saved_wine_prefix="$(saved_setting UURB_WINEPREFIX)"
+saved_wine_bin="$(saved_setting UURB_WINE_BIN)"
+wine_prefix="${WINEPREFIX:-${saved_wine_prefix:-$HOME/.local/share/wineprefixes/uu-remote}}"
 release_manifest="${UURB_RELEASE_MANIFEST:-$wine_prefix/compat/release-manifest.json}"
 if [[ ! -f "$release_manifest" ]]; then
     release_manifest="$repo_dir/patches/uu-remote-4.33.0.8907.json"
@@ -26,7 +28,7 @@ server="$wine_prefix/drive_c/Program Files/Netease/GameViewer/bin/$(manifest_fie
 healthd="$wine_prefix/drive_c/Program Files/Netease/GameViewer/bin/$(manifest_field health_monitor.filename)"
 healthd_original_sha256="$(manifest_field health_monitor.original_sha256)"
 healthd_stub="$repo_dir/build/compat/uu-healthd-stub.exe"
-wine_bin="${UURB_WINE_BIN:-/opt/wine-stable/bin/wine}"
+wine_bin="${UURB_WINE_BIN:-${saved_wine_bin:-/opt/wine-stable/bin/wine}}"
 uuyc_cli="$wine_prefix/drive_c/Program Files/Netease/GameViewer/bin/uuyc-cli.exe"
 devcon="$wine_prefix/drive_c/Program Files/Netease/GameViewer/bin/drivers/devcon.exe"
 devcon_backup="$devcon.uu-original"
@@ -87,6 +89,8 @@ saved_phone_text_mode="$(saved_setting UURB_PHONE_TEXT_MODE)"
 phone_text_mode="${UURB_PHONE_TEXT_MODE:-${saved_phone_text_mode:-auto}}"
 saved_cursor_guard="$(saved_setting UURB_CURSOR_GUARD)"
 cursor_guard_setting="${UURB_CURSOR_GUARD:-${saved_cursor_guard:-off}}"
+saved_libei_mode="$(saved_setting UURB_LIBEI_MODE)"
+libei_mode="${UURB_LIBEI_MODE:-${saved_libei_mode:-backport}}"
 
 bridge_service_active() {
     if "${systemctl_user[@]}" is-active --quiet uu-remote-bridge.service; then
@@ -319,6 +323,30 @@ structured_release_ipc_ready() {
             /usr/bin/tr -d '\r' | /usr/bin/tail -n 1
     )"
     [[ "$cli_version" == "$release_version" ]]
+}
+
+uu_cloud_authenticated() {
+    local private_display
+    local status
+
+    case "$release_version" in
+        4.39.1.1375|4.39.2.1561) ;;
+        *) return 0 ;;
+    esac
+    [[ -x "$wine_bin" && -f "$uuyc_cli" ]] || return 1
+    private_display="$(cat "$private_display_file" 2>/dev/null || true)"
+    [[ "$private_display" == :* && -r "$bridge_xauthority_file" ]] || return 1
+    status="$(
+        timeout 25 /usr/bin/env \
+            "DISPLAY=$private_display" \
+            "XAUTHORITY=$bridge_xauthority_file" \
+            "WINEPREFIX=$wine_prefix" \
+            WINEDEBUG=-all \
+            WINEDLLOVERRIDES='winedbg.exe=d;mscoree,mshtml=' \
+            "$wine_bin" "$uuyc_cli" device status 2>/dev/null |
+            /usr/bin/tr -d '\r'
+    )"
+    /usr/bin/grep -Eq '"success"[[:space:]]*:[[:space:]]*true' <<<"$status"
 }
 
 while (($#)); do
@@ -743,12 +771,33 @@ if [[ -n "$grd_pid" ]]; then
         /usr/bin/awk '$1 == "Max" && $2 == "open" && $3 == "files" {print $4}' \
             "/proc/$grd_pid/limits"
     )"
-    if [[ -f "$libei_backport" ]] &&
-       /usr/bin/grep -Fq "$libei_backport" "/proc/$grd_pid/maps"; then
-        pass 'GNOME RDP uses the isolated patched libei keymap-FD backport'
-    else
-        fail 'GNOME RDP is not using the patched libei keymap-FD backport'
-    fi
+    case "$libei_mode" in
+        backport)
+            if [[ -f "$libei_backport" ]] &&
+               /usr/bin/grep -Fq "$libei_backport" "/proc/$grd_pid/maps"; then
+                pass 'GNOME RDP uses the isolated patched libei keymap-FD backport'
+            else
+                fail 'GNOME RDP is not using the patched libei keymap-FD backport'
+            fi
+            ;;
+        system)
+            system_libei_version="$(
+                /usr/bin/dpkg-query -W -f='${Version}' libei1 2>/dev/null || true
+            )"
+            if [[ -n "$system_libei_version" ]] &&
+               /usr/bin/dpkg --compare-versions "$system_libei_version" ge 1.5.0 &&
+               /usr/bin/grep -Eq '/usr/lib/[^[:space:]]*/libei\.so\.1' \
+                   "/proc/$grd_pid/maps" &&
+               ! /usr/bin/grep -Fq "$libei_backport" "/proc/$grd_pid/maps"; then
+                pass "GNOME RDP uses Ubuntu system libei $system_libei_version"
+            else
+                fail 'GNOME RDP is not using the required Ubuntu 26.04 system libei'
+            fi
+            ;;
+        *)
+            fail "Unknown configured libei mode: $libei_mode"
+            ;;
+    esac
     if [[ "$grd_soft_limit" =~ ^[0-9]+$ ]] &&
        ((grd_soft_limit >= 65536)); then
         pass "GNOME RDP descriptor limit is $grd_soft_limit"
@@ -862,6 +911,11 @@ account_state="$({
 } || true)"
 if [[ -n "$account_state" ]]; then
     pass 'UU account state is present'
+    if uu_cloud_authenticated; then
+        pass 'UU cloud account session is authenticated'
+    else
+        fail 'UU has local account files but is not authenticated with the UU cloud'
+    fi
 else
     printf 'INFO  UU account login has not been observed yet\n'
 fi

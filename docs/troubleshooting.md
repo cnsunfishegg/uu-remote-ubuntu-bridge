@@ -342,20 +342,22 @@ sed -n '/Max open files/p' "/proc/$pid/limits"
 Repeated `Failed to dup keymap fd: Too many open files` messages mean GNOME
 RDP can no longer allocate the descriptor required by `libei` input. On the
 validated Ubuntu 24.04 stack, libei 1.2.1 duplicated every received keymap FD
-without closing the original. Current installations load a bridge-local
+without closing the original. That installation mode loads a bridge-local
 backport of upstream commit `ee27dd5c92e4e9496a36ca2d4112049fe02d2269` into
-GNOME RDP only. `scripts/verify.sh` confirms the running process mapped that
-library, and a timed verifier rejects renewed descriptor growth.
+GNOME RDP only. The Ubuntu 26.04 preview instead requires and maps its system
+`libei1` 1.5.0 or newer, which includes the upstream close-FD fix.
+`scripts/verify.sh` checks the selected library mode and a timed verifier
+rejects renewed descriptor growth.
 
 The 65536 soft limit and 4096-descriptor relay rebuild remain as defense in
 depth. The launcher raises its own soft limit after any `runuser`/PAM boundary,
 because that boundary can replace a system unit's 65536 limit with 1024. The
 quick verifier also recognizes the supported application-profile service and
 checks GNOME RDP's listener inside its network namespace. Rerun the installer
-if the verifier still reports a 1024 limit, a missing backport, or
+if the verifier still reports a 1024 limit, the wrong libei mode, or
 installed-source drift. The threshold is configurable with
 `--grd-fd-restart-threshold`; `0` disables only the fallback guard, not the
-backport.
+24.04 backport or 26.04 system-library check.
 
 ## Individual keys lag or disappear, but direct RDP is normal
 

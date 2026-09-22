@@ -26,8 +26,12 @@ class PatchError(RuntimeError):
     pass
 
 
-def selected_manifests(paths: Sequence[Path] | None) -> tuple[ReleaseManifest, ...]:
-    return load_manifests(paths)
+def selected_manifests(
+    paths: Sequence[Path] | None,
+    *,
+    allow_experimental: bool = False,
+) -> tuple[ReleaseManifest, ...]:
+    return load_manifests(paths, allow_experimental=allow_experimental)
 
 
 def classify_or_error(
@@ -127,6 +131,11 @@ def add_manifest_option(parser: argparse.ArgumentParser) -> None:
         action="append",
         help="approved release manifest; repeat to allow multiple versions",
     )
+    parser.add_argument(
+        "--allow-experimental",
+        action="store_true",
+        help="accept an explicitly marked experimental manifest",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -161,6 +170,11 @@ def parse_args() -> argparse.Namespace:
     )
     field_parser.add_argument("field")
     field_parser.add_argument("--manifest", type=Path, required=True)
+    field_parser.add_argument(
+        "--allow-experimental",
+        action="store_true",
+        help="accept an explicitly marked experimental manifest",
+    )
     return parser.parse_args()
 
 
@@ -172,11 +186,15 @@ def main() -> int:
     args = parse_args()
     try:
         if args.command == "field":
-            manifests = selected_manifests([args.manifest])
+            manifests = selected_manifests(
+                [args.manifest], allow_experimental=args.allow_experimental
+            )
             print(manifest_value(manifests[0], args.field))
             return 0
 
-        manifests = selected_manifests(args.manifest)
+        manifests = selected_manifests(
+            args.manifest, allow_experimental=args.allow_experimental
+        )
         if args.command == "manifests":
             for manifest in manifests:
                 print(

@@ -777,8 +777,8 @@ helper waited 20 ms and checked only that `xclip` remained alive; it could emit
 old clipboard. Bidirectional VNC cut-text could then echo target semantic text
 back into the private display. The corrected helper polls
 `XGetSelectionOwner`, fails without any paste if ownership is not confirmed,
-sets RealVNC `ServerCutText=0`, and starts x11vnc with `-seldir recv`.
-`ClientCutText=1` remains enabled for UU/private-to-Ubuntu copy, while reverse
+sets TigerVNC `AcceptClipboard=0`, and starts x11vnc with `-seldir recv`.
+`SendClipboard=1` remains enabled for UU/private-to-Ubuntu copy, while reverse
 feedback is intentionally blocked.
 
 The isolated acceptance is:

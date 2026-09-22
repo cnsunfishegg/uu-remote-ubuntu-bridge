@@ -130,15 +130,20 @@ def manifest_from_dict(
     path: Path,
     *,
     require_approved: bool = True,
+    allow_experimental: bool = False,
 ) -> ReleaseManifest:
     raw = _mapping(raw_value, "manifest")
     if raw.get("schema_version") != 1:
         raise ManifestError("schema_version must be 1")
 
     review_status = _string(raw, "review_status")
-    if require_approved and review_status != "approved":
+    allowed_statuses = {"approved"}
+    if allow_experimental:
+        allowed_statuses.add("experimental")
+    if require_approved and review_status not in allowed_statuses:
+        allowed = " or ".join(repr(item) for item in sorted(allowed_statuses))
         raise ManifestError(
-            f"{path}: manifest status is {review_status!r}, not 'approved'"
+            f"{path}: manifest status is {review_status!r}, not {allowed}"
         )
 
     version = _string(raw, "version")
@@ -216,16 +221,30 @@ def manifest_from_dict(
     )
 
 
-def load_manifest(path: Path, *, require_approved: bool = True) -> ReleaseManifest:
+def load_manifest(
+    path: Path,
+    *,
+    require_approved: bool = True,
+    allow_experimental: bool = False,
+) -> ReleaseManifest:
     resolved = path.expanduser().resolve()
     try:
         raw = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ManifestError(f"could not read manifest {resolved}: {error}") from error
-    return manifest_from_dict(raw, resolved, require_approved=require_approved)
+    return manifest_from_dict(
+        raw,
+        resolved,
+        require_approved=require_approved,
+        allow_experimental=allow_experimental,
+    )
 
 
-def load_manifests(paths: Sequence[Path] | None = None) -> tuple[ReleaseManifest, ...]:
+def load_manifests(
+    paths: Sequence[Path] | None = None,
+    *,
+    allow_experimental: bool = False,
+) -> tuple[ReleaseManifest, ...]:
     selected = (
         [path.expanduser().resolve() for path in paths]
         if paths
@@ -234,7 +253,9 @@ def load_manifests(paths: Sequence[Path] | None = None) -> tuple[ReleaseManifest
     if not selected:
         raise ManifestError("no approved release manifests were found")
 
-    manifests = tuple(load_manifest(path) for path in selected)
+    manifests = tuple(
+        load_manifest(path, allow_experimental=allow_experimental) for path in selected
+    )
     versions: set[str] = set()
     digests: set[str] = set()
     for manifest in manifests:

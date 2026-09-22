@@ -18,7 +18,8 @@ class DebianBundleTests(unittest.TestCase):
             bundle = root / "bundle"
             source = bundle / "source"
             source.mkdir(parents=True)
-            (bundle / "VERSION").write_text("0.3.0~rc2-1\n", encoding="ascii")
+            version = (REPOSITORY / "packaging" / "VERSION").read_text().strip()
+            (bundle / "VERSION").write_text(version + "\n", encoding="ascii")
             marker = root / "marker"
             for filename, label in (("install.sh", "setup"), ("uninstall.sh", "remove")):
                 script = source / filename
@@ -48,8 +49,17 @@ class DebianBundleTests(unittest.TestCase):
                 ["bash", str(WRAPPER), "--help"], env=environment, check=True
             )
             self.assertEqual("setup:--help\n", marker.read_text(encoding="ascii"))
-            copied = root / "data" / "uu-remote-ubuntu-bridge-installer" / "0.3.0~rc2-1"
+            copied = root / "data" / "uu-remote-ubuntu-bridge-installer" / version
             self.assertTrue((copied / ".package-ready").is_file())
+
+            subprocess.run(
+                ["bash", str(WRAPPER), "--from-desktop"],
+                env=environment,
+                input="\n",
+                text=True,
+                check=True,
+            )
+            self.assertEqual("setup:\n", marker.read_text(encoding="ascii"))
 
             subprocess.run(
                 ["bash", str(WRAPPER), "--uninstall", "--dry-run"],
@@ -67,6 +77,10 @@ class DebianBundleTests(unittest.TestCase):
         self.assertIn("git -C \"$repo_dir\" archive --format=tar HEAD", builder)
         self.assertIn('asset_version="${version//\\~/-}"', builder)
         self.assertNotIn("postinst", builder)
+        menu_entry = (REPOSITORY / "packaging" / "uu-remote.desktop").read_text()
+        self.assertIn("Exec=uu-remote-bridge-setup --from-desktop", menu_entry)
+        self.assertIn("Terminal=true", menu_entry)
+        self.assertIn('"$stage/usr/share/applications/uu-remote.desktop"', builder)
         self.assertIn('if [[ "$skip_packages" == true ]]', installer)
         self.assertIn("install_winehq", installer)
 

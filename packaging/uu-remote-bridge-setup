@@ -6,6 +6,11 @@ umask 077
 package_root="${UURB_PACKAGE_ROOT:-/usr/share/uu-remote-ubuntu-bridge-installer}"
 source_root="$package_root/source"
 version_file="$package_root/VERSION"
+desktop_launch=false
+if [[ "${1:-}" == --from-desktop ]]; then
+    desktop_launch=true
+    shift
+fi
 
 if ((EUID == 0)); then
     printf 'Run setup as the logged-in desktop user, not with sudo.\n' >&2
@@ -58,4 +63,20 @@ for argument in "$@"; do
         exit 2
     fi
 done
+if [[ "$desktop_launch" == true ]]; then
+    printf '\nUU Remote setup: dependencies and compatibility components may take a while.\n'
+    printf 'Keep this window open. Sign in to the official UU client when prompted.\n\n'
+    result=0
+    ./install.sh "$@" || result=$?
+    if ((result == 0)); then
+        printf '\nSetup finished. Open "UU Remote" to manage this PC or control another PC.\n'
+    else
+        printf '\nSetup stopped (exit %d). Review the message above, then retry from the app menu.\n' "$result" >&2
+    fi
+    if [[ -t 0 ]]; then
+        printf 'Press Enter to close this window... '
+        read -r _ || true
+    fi
+    exit "$result"
+fi
 exec ./install.sh "$@"

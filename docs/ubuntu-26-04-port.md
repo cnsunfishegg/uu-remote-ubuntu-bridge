@@ -2,11 +2,12 @@
 
 ## Status
 
-Ubuntu 26.04 is an explicit **preview** path in this fork. It has passed the
-source-level, package-level, and installer-policy audit below, but it has not
-yet earned the same live controller acceptance claim as the Ubuntu 24.04
-baseline. Do not enable unattended startup until the six end-to-end checks at
-the end of this document have passed on the target machine.
+Ubuntu 26.04 is this fork's primary target, but controller support is still
+**experimental**. It has passed the source-level, package-level, and
+installer-policy audit below; these checks alone do not prove the same live
+controller acceptance as the Ubuntu 24.04 baseline. Do not enable unattended
+startup until the six end-to-end checks at the end of this document have
+passed on the target machine.
 
 ## Audited dependency boundary
 

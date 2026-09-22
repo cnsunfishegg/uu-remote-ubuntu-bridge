@@ -1,34 +1,52 @@
-## Known issue in v0.3.0-rc.2: controller black screen
+# v0.3.0-rc.3 — Ubuntu 26.04-first setup (experimental)
 
-The attached RC2 `.deb` predates the window-following and reopen changes.
-Opening a remote session can crop or black out its video and exit controls.
-Do not treat RC2 as a working remote controller. A replacement package is
-pending acceptance on two real computers.
+This fork targets x86-64 Ubuntu 26.04 GNOME. Ubuntu 24.04 remains supported
+as the upstream baseline. This is an unofficial, source-only installer bundle
+derived from [Lachlan Chen's UU Remote Ubuntu Bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge),
+not a NetEase Linux application. The original MIT attribution is preserved.
 
-## Experimental installer bundle for this fork
+## Install and open
 
-This is a pre-release of the [public fork](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge), derived from [Lachlan Chen's UU Remote Ubuntu Bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge). The original architecture and MIT attribution remain intact. The `.deb` is a **source-only installer bundle**, not a preconfigured UU host and not an official NetEase package.
-
-This RC2 package replaces `v0.3.0-rc.1` and fixes only the initial black management window. It does not follow UU's later remote-session window or reliably release its local window helper after closing. The current source tree contains experimental fixes, but they are not part of this RC2 asset. Keyboard, mouse, audio, and remote video still require acceptance against a real second device.
-
-### Install
-
-On an x86-64 Ubuntu 24.04 desktop (or an Ubuntu 26.04 test host), download the `.deb` below and run:
+Download `uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb` below.
+In the download directory, run:
 
 ```bash
-sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc2-1_amd64.deb
-uu-remote-bridge-setup
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
 ```
 
-Run the second command from a logged-in GNOME desktop as the regular user, without `sudo`. It still needs network access, Ubuntu/WineHQ dependencies, a verified download of the official UU Windows installer, and your normal UU account login. The `.deb` itself performs none of those operations during `apt install`.
+Open **UU Remote Setup** from the Ubuntu app menu. Leave the terminal window
+open while it installs dependencies, downloads the hash-verified official UU
+Windows client, builds the bridge, and asks for your normal UU account sign-in.
+Setup asks for sudo when needed; do not run setup itself with sudo. After it
+finishes, the same app-menu entry becomes **UU Remote**. Use it to manage this
+Ubuntu host or control another computer; the host can run in the background.
+If the setup icon is missing, run `uu-remote-bridge-setup` from your logged-in
+GNOME desktop terminal. The checksum file is for optional download verification.
 
-### Scope and limitations
+## Changes since RC2
 
-- This release includes the fork's work-in-progress input-routing, silent-audio, TigerVNC, and Ubuntu 26.04 preview changes.
-- Ubuntu 26.04 and UU 4.41 are experimental, not broadly validated. The 4.41 manifest is isolated and is **not** the default release.
-- No NetEase binaries, Wine prefixes, credentials, account data, or private logs are bundled.
-- The bridge service runs in the background. RC2's bridge-created **UU Remote** desktop entry is suitable only for experimental account/device management; do not rely on it for controlling another machine.
-- The source snapshot is not a Git checkout; Git-based automatic update and upgrade commands are not supported from this package. Use a source checkout for those workflows.
-- Removing the `.deb` does not remove a user's remote-access configuration. Run `uu-remote-bridge-setup --uninstall` as that desktop user first if you intend to remove the bridge.
+- The controller viewer follows UU's active session as it resizes or enters
+  fullscreen and releases its local lock when closed, so it can be reopened.
+- The package now offers a setup launcher in the app menu; after setup it is
+  overridden by the single installed UU Remote entry instead of adding a
+  second permanent launcher. The quick start is 26.04-first.
+- First-time silent audio remains the default: system microphone and speakers
+  are not forwarded by this bridge's default configuration.
 
-The package has been structurally extracted and tested, and the repository unit tests pass. It has **not** been accepted as a clean-install, end-to-end remote session across multiple machines. Do not enable unattended startup until you have verified the interactive path on your host.
+## Limits
+
+The RC2 asset is not updated and still has the known black controller issue.
+This RC3 contains subsequent local fixes and automated controller-window,
+packaging, and unit checks. It is **not** a claim that every Windows, macOS,
+phone, display, input method, or audio configuration has passed two-device
+acceptance. Check remote video, mouse, keyboard, audio isolation, fullscreen,
+exit, and reconnect on your own machines before relying on it. Do not enable
+unattended startup by default. UU 4.41 is an isolated experiment, not the
+default: the bridge remains pinned to the audited UU 4.33 installer.
+
+No NetEase binaries, Wine prefixes, credentials, private logs, or account data
+are in the .deb. Internet access, Ubuntu/WineHQ dependencies, and official UU
+sign-in are required during setup. The .deb is a fixed snapshot: Git-based
+automatic updates do not work. Removing it alone leaves per-user bridge state
+untouched; run `uu-remote-bridge-setup --uninstall` as the desktop user before
+removing the package if you want to undo the bridge configuration.

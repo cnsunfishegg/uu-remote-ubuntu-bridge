@@ -22,7 +22,8 @@
 > [Lachlan Chen 的 UU Remote Ubuntu Bridge 原项目](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)。
 > Wine/Xvfb、RDP/VNC 中继、输入代理、无人值守及升级架构属于原项目。本分支的
 > 工作进行中改动涉及输入路由、静音音频隔离、TigerVNC 中继及 Ubuntu 26.04
-> 预览支持。Ubuntu 26.04 和 UU 4.41 **仍属实验性功能**，不是已广泛验证的
+> 支持。本分支以 Ubuntu 26.04 为主要目标，24.04 保留上游兼容路径；26.04 的
+> 控制端和 UU 4.41 **仍属实验性功能**，不是已广泛验证的
 > 正式版本。保留原作者署名与 MIT 许可证；下文主要继承上游文档，只有明确
 > 标出的部分是此 Fork 的改动。
 
@@ -30,10 +31,11 @@
 RDP 中继呈现真实的 GNOME Wayland 会话。画面、鼠标、键盘、重新连接和服务
 自动恢复均已验证。
 
-当前版本有意锁定为 UU 远程 `4.33.0.8907`、Ubuntu 24.04、GNOME 46 和
-Wine 11。任何未知二进制文件都会被拒绝，绝不会直接套用旧补丁。
+当前版本有意锁定为 UU 远程 `4.33.0.8907`；上游 24.04 / GNOME 46
+路径保留，本分支主要针对 Ubuntu 26.04 / GNOME 50。任何未知二进制文件
+都会被拒绝，绝不会直接套用旧补丁。
 
-此 fork 额外提供 Ubuntu 26.04 / GNOME 50 的**预览**安装路径：它会使用并
+此 fork 以 Ubuntu 26.04 / GNOME 50 为主要目标：它会使用并
 验证系统的新版 `libei`，不会把 24.04 的旧兼容库载入 GNOME 50。它尚未完成与
 24.04 基线相同的真实控制端验收；部署前请阅读
 [26.04 移植说明](../docs/ubuntu-26-04-port.md)，并先完成其中的六项验收。
@@ -53,21 +55,23 @@ UU 只从网易官方域名 [uuyc.163.com](https://uuyc.163.com/) 下载。官�
 
 ## 快速安装
 
-```bash
-./install.sh
-```
-
-此 Fork 的 [实验性 Release](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge/releases)
-也提供 `amd64` 的 `.deb` **安装器包**。它只包含桥接器源码，不包含网易程序，也不
-代表装完包就能直接远控。下载后依次执行：
+在 x86-64 Ubuntu 26.04 GNOME 桌面上，从
+[本分支 Releases](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge/releases)
+下载 `amd64` 的 `.deb`。Ubuntu 24.04 也保留支持。打开下载目录中的终端，执行：
 
 ```bash
-sudo apt install ./uu-remote-ubuntu-bridge-installer_*.deb
-uu-remote-bridge-setup
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
 ```
 
-第二条命令要在已登录的 GNOME 桌面以普通用户运行，不能加 `sudo`；它仍需联网
-安装依赖、下载并校验官方 UU 安装包，以及完成账号登录。该固定源码快照不支持
+然后从应用菜单打开 **UU Remote 设置**，保持弹出的终端窗口开启，按提示完成
+依赖安装和官方 UU 账号登录。完成后，应用菜单中的同一入口会变成 **UU Remote**：
+既可管理本机，也可控制另一台电脑；别人连接本机不要求打开这个窗口。
+如果应用菜单里找不到设置入口，在已登录的 GNOME 桌面终端以普通用户运行
+`uu-remote-bridge-setup`，**不要**加 `sudo`。从源码检出安装的开发者仍可运行
+`./install.sh`。
+
+`.deb` 是仅含源码的安装器包，不包含网易程序或账号，也不代表安装包后立即可远控。
+设置仍需联网安装依赖、下载并校验官方 UU 安装包。该固定源码快照不支持
 依赖 Git 仓库的自动升级；详情见[Debian 包说明](../packaging/README.Debian)。
 
 安装后，桌面只用桥接器生成的 **UU Remote**：既能查看本机账号/设备，也可尝试

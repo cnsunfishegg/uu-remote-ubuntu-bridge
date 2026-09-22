@@ -6,12 +6,17 @@ Wine/Xvfb, RDP/VNC, input-broker, and maintenance architecture is by Lachlan
 Chen; this fork contains work-in-progress host-specific changes. The original
 MIT license and attribution are included.
 
-Install on x86-64 Ubuntu 24.04, or test the Ubuntu 26.04 preview:
+This fork primarily targets x86-64 Ubuntu 26.04 GNOME. Ubuntu 24.04 remains
+supported as the upstream baseline. In the download directory, run:
 
-    sudo apt install ./uu-remote-ubuntu-bridge-installer_*.deb
-    uu-remote-bridge-setup
+    sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
 
-Run the second command as the logged-in desktop user, not with sudo. It copies
+Then open "UU Remote Setup" from the app menu and keep its terminal window
+open until setup finishes. The same menu slot becomes "UU Remote" after setup.
+If the setup icon is unavailable, run `uu-remote-bridge-setup` from a desktop
+terminal instead.
+
+Run setup as the logged-in desktop user, not with sudo. It copies
 the reviewed source to a versioned user-writable directory before building;
 the .deb installation itself does not download software, alter the desktop,
 configure unattended access, or log into UU. The setup command may request
@@ -33,8 +38,10 @@ Git-based automatic updater/upgrade workflow is not supported from this .deb;
 use a real source checkout for that workflow. To undo the bridge before
 removing the package, run `uu-remote-bridge-setup --uninstall` as the desktop
 user. Removing the Debian package alone deliberately leaves per-user UU state
-untouched. Ubuntu 26.04 and UU 4.41 remain experimental and require separate
-acceptance checks; do not treat the package as a stable compatibility claim.
+untouched. The 26.04 controller path and UU 4.41 remain experimental; do not
+treat the package as a broadly validated compatibility claim. Upgrading the
+.deb does not automatically rerun setup: run `uu-remote-bridge-setup` again
+from a logged-in desktop terminal after an upgrade.
 
 Source and issue tracker: https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge
 Original project: https://github.com/lachlanchen/uu-remote-ubuntu-bridge

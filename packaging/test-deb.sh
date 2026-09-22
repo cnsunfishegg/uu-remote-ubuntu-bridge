@@ -22,6 +22,9 @@ if [[ -e "$temporary/control/postinst" ||
 fi
 source_root="$temporary/root/usr/share/$package_name"
 [[ -x "$temporary/root/usr/bin/uu-remote-bridge-setup" ]]
+[[ -f "$temporary/root/usr/share/applications/uu-remote.desktop" ]]
+grep -q 'Exec=uu-remote-bridge-setup --from-desktop' \
+    "$temporary/root/usr/share/applications/uu-remote.desktop"
 [[ -f "$source_root/source/LICENSE" ]]
 [[ -f "$temporary/root/usr/share/doc/$package_name/copyright" ]]
 [[ -x "$source_root/source/install.sh" ]]

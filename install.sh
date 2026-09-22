@@ -360,7 +360,7 @@ fi
 # shellcheck source=/dev/null
 source /etc/os-release
 if ! uurb_select_platform "${ID:-}" "${VERSION_ID:-}"; then
-    printf 'Only Ubuntu 24.04 and the Ubuntu 26.04 preview are supported; detected %s %s.\n' \
+    printf 'Only Ubuntu 26.04 and Ubuntu 24.04 are supported; detected %s %s.\n' \
         "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
     exit 1
 fi

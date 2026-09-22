@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=UU Remote Setup
+Name[zh_CN]=UU 远程设置
+Name[zh_TW]=UU 遠端設定
+Comment=Finish setting up UU Remote Ubuntu Bridge
+Comment[zh_CN]=完成 UU 远程 Ubuntu 桥接器安装
+Exec=uu-remote-bridge-setup --from-desktop
+Icon=preferences-system-network
+Terminal=true
+Categories=Network;RemoteAccess;
+StartupNotify=true
+Keywords=UU;Remote;Desktop;Setup;

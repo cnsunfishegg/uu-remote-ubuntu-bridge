@@ -31,7 +31,8 @@ trap cleanup EXIT
 stage="$temporary/package"
 package_root="$stage/usr/share/$package_name"
 doc_root="$stage/usr/share/doc/$package_name"
-mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$package_root/source" \
+mkdir -p "$stage/DEBIAN" "$stage/usr/bin" \
+    "$stage/usr/share/applications" "$package_root/source" \
     "$doc_root" "$output_dir"
 
 # The archive contains only tracked source from the exact committed revision.
@@ -40,6 +41,8 @@ git -C "$repo_dir" archive --format=tar HEAD | \
     tar -xf - -C "$package_root/source"
 install -m 0755 "$repo_dir/packaging/uu-remote-bridge-setup" \
     "$stage/usr/bin/uu-remote-bridge-setup"
+install -m 0644 "$repo_dir/packaging/uu-remote.desktop" \
+    "$stage/usr/share/applications/uu-remote.desktop"
 install -m 0644 "$repo_dir/LICENSE" "$doc_root/copyright"
 install -m 0644 "$repo_dir/packaging/README.Debian" "$doc_root/README.Debian"
 printf '%s\n' "$version" >"$package_root/VERSION"

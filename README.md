@@ -8,8 +8,8 @@
 
 **Use NetEase UU Remote to view and fully control the Ubuntu GNOME desktop.**
 
-[![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
-[![GNOME 46](https://img.shields.io/badge/GNOME-46-4A86CF?logo=gnome&logoColor=white)](https://www.gnome.org/)
+[![Ubuntu 26.04 target](https://img.shields.io/badge/Ubuntu-26.04%20target-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![GNOME 50 target](https://img.shields.io/badge/GNOME-50%20target-4A86CF?logo=gnome&logoColor=white)](https://www.gnome.org/)
 [![UU Remote](https://img.shields.io/badge/UU_Remote-4.33.0.8907-00A870)](https://uuyc.163.com/)
 [![Wine 11](https://img.shields.io/badge/Wine-11.0-800000?logo=wine&logoColor=white)](https://www.winehq.org/)
 [![Patch policy](https://img.shields.io/badge/Patches-fail--closed-1F883D)](docs/security.md)
@@ -31,8 +31,10 @@
 > The Wine/Xvfb, RDP/VNC relay, input-broker, unattended-startup, and update
 > architecture comes from the upstream project. This fork contains
 > work-in-progress, host-specific changes to input routing, silent-audio
-> isolation, the TigerVNC relay, and an Ubuntu 26.04 preview. Ubuntu 26.04 and
-> UU 4.41 are **experimental**, not broadly validated releases. The original
+> isolation, the TigerVNC relay, and Ubuntu 26.04. This fork's primary target
+> is Ubuntu 26.04; 24.04 remains supported as the upstream baseline. The
+> 26.04 controller path and UU 4.41 are **experimental**, not broadly validated
+> releases. The original
 > MIT license and author attribution are preserved; the documentation below
 > is largely inherited from upstream unless a fork-specific change is noted.
 
@@ -58,9 +60,9 @@ the official Windows client and verifies the complete installer hash. Do not
 install an unverified `.deb`, `.rpm`, or AppImage from a look-alike download
 site.
 
-The validated baseline is x86-64 Ubuntu 24.04 with a logged-in GNOME 46
-desktop (physical, Wayland, Xorg, or XRDP). This fork also has an explicit
-Ubuntu 26.04 preview path for GNOME 50: it checks the newer system `libei`
+The upstream validated baseline is x86-64 Ubuntu 24.04 with a logged-in GNOME 46
+desktop (physical, Wayland, Xorg, or XRDP). This fork primarily targets
+Ubuntu 26.04 with GNOME 50: it checks the newer system `libei`
 instead of loading the 24.04 compatibility library. Read the
 [26.04 port notes](docs/ubuntu-26-04-port.md) before treating that path as a
 daily-use deployment. The installer rejects other OS releases and
@@ -108,21 +110,35 @@ switches between them automatically. Read the [behavior-track handoff](docs/rele
 
 ## Quick start
 
-Run from the logged-in Ubuntu GNOME desktop session:
+For this fork, use an x86-64 Ubuntu 26.04 GNOME desktop with internet access
+(Ubuntu 24.04 is also supported). Download the `.deb` from the
+[fork Releases](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge/releases)
+and install it from the folder where it was downloaded:
+
+```bash
+sudo apt install ./uu-remote-ubuntu-bridge-installer_0.3.0-rc3-1_amd64.deb
+```
+
+Then open **UU Remote Setup** from the app menu. It runs as your logged-in
+desktop user, installs dependencies (asking for sudo when needed), builds the
+bridge, and opens the official UU client for your account sign-in. Keep its
+terminal window open until it says setup finished. After setup, the same app
+menu slot becomes **UU Remote**: use it to manage this PC or control another
+PC. The host bridge runs in the background; opening the app is not required
+for others to connect. The `.deb` contains no NetEase program or credentials.
+If the app-menu setup launcher is unavailable, run `uu-remote-bridge-setup`
+without `sudo` from the logged-in GNOME desktop.
+
+Developers installing from a source checkout can instead run:
 
 ```bash
 ./install.sh
 ```
 
-The [fork's experimental Release](https://github.com/cnsunfishegg/uu-remote-ubuntu-bridge/releases)
-also provides an `amd64` Debian **installer bundle**. It contains the tracked
-bridge source, not a ready-to-use UU host or any NetEase executable. Install
-the `.deb` with `sudo apt install ./uu-remote-ubuntu-bridge-installer_*.deb`,
-then run `uu-remote-bridge-setup` **without sudo** from the logged-in GNOME
-desktop. This runs the same installer from a private user-writable source
-snapshot and still needs network access, Ubuntu/WineHQ dependencies, and
-official UU account sign-in. The Git-based automatic updater is unavailable
-from this snapshot; see [Debian package notes](packaging/README.Debian).
+The `.deb` is an experimental source-only **installer bundle**, not a
+ready-to-use host. It runs the same installer from a private, user-writable
+source snapshot. Git-based automatic updates are unavailable from this
+snapshot; see [Debian package notes](packaging/README.Debian).
 
 The one installer:
 
@@ -443,7 +459,7 @@ Ubuntu 24.04's libei 1.2.1 leaks the received keyboard-keymap descriptor after
 duplicating it. For that release, the installer builds the exact upstream
 one-line fix from a hash-verified 1.2.1 archive and loads it only into this
 bridge's GNOME RDP child. Ubuntu 26.04's GNOME 50 requires a newer libei ABI,
-so the preview path verifies and uses its system `libei1` 1.5.0 or newer; that
+so the 26.04 path verifies and uses its system `libei1` 1.5.0 or newer; that
 release already contains the upstream close-FD fix. A raised child limit and
 persistent 4096-descriptor relay guard remain as defense in depth:
 

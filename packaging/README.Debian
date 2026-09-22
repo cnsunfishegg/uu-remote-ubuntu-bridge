@@ -19,6 +19,13 @@ sudo for Ubuntu/WineHQ dependencies, downloads the hash-verified official UU
 installer, and asks for normal UU account sign-in. It does not include or
 redistribute NetEase's proprietary programs.
 
+After setup, use "UU Remote" for this Ubuntu host's management window. The
+separate "UU Remote Controller" entry is for controlling another computer:
+after an explicit confirmation it temporarily stops this host's bridge,
+opens the official UU client on the visible desktop, then restores the host
+service when the client exits. Do not start controller mode over a UU session
+to this same Ubuntu machine, or you will disconnect yourself.
+
 The bundled source is a release snapshot, not a Git checkout. The project's
 Git-based automatic updater/upgrade workflow is not supported from this .deb;
 use a real source checkout for that workflow. To undo the bridge before

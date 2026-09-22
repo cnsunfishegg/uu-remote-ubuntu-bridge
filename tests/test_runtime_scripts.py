@@ -422,6 +422,9 @@ class RuntimeScriptTests(unittest.TestCase):
         desktop = (
             REPOSITORY / "desktop" / "uu-remote.desktop.in"
         ).read_text()
+        controller_desktop = (
+            REPOSITORY / "desktop" / "uu-remote-controller.desktop.in"
+        ).read_text()
         digest = (REPOSITORY / "scripts" / "runtime-source-digest").read_text()
 
         self.assertIn('"127.0.0.1:$web_port"', console)
@@ -445,12 +448,18 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn("Exec=@EXEC@", desktop)
         self.assertIn("StartupWMClass=TigerVNC Viewer", desktop)
         self.assertNotIn("noVNC", desktop)
-        self.assertIn('"$desktop_entry" "$HOME/.local/bin/uu-remote"', installer)
+        self.assertIn('"$controller_entry" "$HOME/.local/bin/uu-remote"', installer)
+        self.assertIn('Name=UU Remote Controller', controller_desktop)
+        self.assertIn('Exec=@EXEC@', controller_desktop)
+        self.assertIn('(controller_template, controller_destination, "control")', installer)
         self.assertIn('exec "$console_bin" window "$@"', command)
+        self.assertIn('    control)', command)
+        self.assertIn("-buttons 'Continue:0,Cancel:1' -default Cancel", command)
+        self.assertIn('exec "$0" login', command)
         self.assertNotIn("activate_physical_client", command)
         self.assertNotIn("open-client", command)
         self.assertIn('exec "$console_bin" open "$@"', command)
-        self.assertIn('-id "$client_window"', console)
+        self.assertIn('-sid "$client_window"', console)
         self.assertIn("/usr/bin/flock -n 9", console)
         self.assertIn("activate_existing_window", console)
         self.assertIn("cleanup_window", console)
@@ -463,6 +472,7 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn("scripts/uu-remote-console", digest)
         self.assertIn("systemd/uu-remote-console.service", digest)
         self.assertIn("desktop/uu-remote.desktop.in", digest)
+        self.assertIn("desktop/uu-remote-controller.desktop.in", digest)
 
         environment = os.environ | {
             "UURB_CONSOLE_VNC_PORT": "5926",

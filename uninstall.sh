@@ -159,7 +159,9 @@ rm -f \
     "$HOME/.config/systemd/user/uu-remote-bridge.service" \
     "$HOME/.config/systemd/user/uu-remote-console.service" \
     "$HOME/.local/share/applications/uu-remote.desktop" \
-    "$HOME/Desktop/UU Remote.desktop"
+    "$HOME/.local/share/applications/uu-remote-controller.desktop" \
+    "$HOME/Desktop/UU Remote.desktop" \
+    "$HOME/Desktop/UU Remote Controller.desktop"
 rm -rf \
     "$HOME/.config/uu-remote-bridge" \
     "$wine_prefix/compat" \

@@ -1029,24 +1029,34 @@ install -m 0644 "$repo_dir/systemd/uu-keyring-unlock.service" \
     "$HOME/.config/systemd/user/uu-keyring-unlock.service"
 
 desktop_entry="$HOME/.local/share/applications/uu-remote.desktop"
+controller_entry="$HOME/.local/share/applications/uu-remote-controller.desktop"
 "$python_bin" - "$repo_dir/desktop/uu-remote.desktop.in" \
-    "$desktop_entry" "$HOME/.local/bin/uu-remote" <<'PY'
+    "$desktop_entry" "$repo_dir/desktop/uu-remote-controller.desktop.in" \
+    "$controller_entry" "$HOME/.local/bin/uu-remote" <<'PY'
 import sys
 from pathlib import Path
 
-template, destination, executable = map(Path, sys.argv[1:])
+host_template, host_destination, controller_template, controller_destination, executable = map(Path, sys.argv[1:])
 escaped = str(executable).replace("\\", "\\\\").replace(" ", "\\ ")
-rendered = template.read_text(encoding="ascii").replace(
-    "@EXEC@", f"{escaped} open"
-)
-destination.write_text(rendered, encoding="ascii")
+for template, destination, action in (
+    (host_template, host_destination, "open"),
+    (controller_template, controller_destination, "control"),
+):
+    rendered = template.read_text(encoding="ascii").replace(
+        "@EXEC@", f"{escaped} {action}"
+    )
+    destination.write_text(rendered, encoding="ascii")
 PY
-chmod 0644 "$desktop_entry"
+chmod 0644 "$desktop_entry" "$controller_entry"
 if [[ -d "$HOME/Desktop" ]]; then
     desktop_shortcut="$HOME/Desktop/UU Remote.desktop"
+    controller_shortcut="$HOME/Desktop/UU Remote Controller.desktop"
     install -m 0755 "$desktop_entry" "$desktop_shortcut"
+    install -m 0755 "$controller_entry" "$controller_shortcut"
     if command -v gio >/dev/null 2>&1; then
         gio set "$desktop_shortcut" metadata::trusted true \
+            >/dev/null 2>&1 || true
+        gio set "$controller_shortcut" metadata::trusted true \
             >/dev/null 2>&1 || true
     fi
 fi

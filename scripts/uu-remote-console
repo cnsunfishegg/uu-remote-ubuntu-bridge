@@ -142,7 +142,6 @@ find_client_window() {
     local best_score=-1
     local geometry=""
     local height=0
-    local name
     local score=0
     local state=""
     local window
@@ -150,11 +149,6 @@ find_client_window() {
 
     discover_bridge || return 1
     while read -r window; do
-        name="$(
-            /usr/bin/env DISPLAY="$bridge_display" \
-                XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/xdotool getwindowname "$window" 2>/dev/null || true
-        )"
         state="$(
             /usr/bin/env DISPLAY="$bridge_display" \
                 XAUTHORITY="$bridge_xauthority" \
@@ -171,11 +165,11 @@ find_client_window() {
         height="${BASH_REMATCH[2]}"
         # Ignore toasts, DXGI helpers, and tiny GameViewer utility windows.
         ((width >= 400 && height >= 300)) || continue
-        # Wine's real device-list window is named "winhome", not "UU Remote".
-        # The latter is often an iconified shell: mirroring it yields black.
-        score=100
-        [[ "$name" == winhome ]] && score=300
-        [[ "$state" == *'window state: Normal'* ]] && score=$((score + 50))
+        # UU can name a remote-session window after a device. Do not hardcode
+        # that private title: prefer the visible full-size application window.
+        score=$((width * height))
+        [[ "$state" == *'window state: Normal'* ]] &&
+            score=$((score + 2000000))
         if ((score > best_score)); then
             best="$window"
             best_score="$score"
@@ -583,11 +577,14 @@ open_window() {
     trap 'exit 143' TERM HUP
     focus_client
 
+    # Mirror the root scene at the UU window's coordinates. Unlike -id,
+    # -sid can show separate popups inside this rectangle. A remote session
+    # outside it still needs the native controller path.
     /usr/bin/env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 \
         /usr/bin/x11vnc \
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
-        -id "$client_window" \
+        -sid "$client_window" \
         -rfbport "$window_port" \
         -listen 127.0.0.1 \
         -localhost \

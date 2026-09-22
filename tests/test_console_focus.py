@@ -12,7 +12,8 @@ SOURCE = (Path(__file__).resolve().parents[1] / "scripts/uu-remote-console").rea
 class ConsoleFocusTests(unittest.TestCase):
     def test_local_window_keeps_bidirectional_input_on_loopback(self):
         window = SOURCE.split("open_window() {", 1)[1].split("serve_console() {", 1)[0]
-        self.assertIn('-id "$client_window"', window)
+        self.assertIn('-sid "$client_window"', window)
+        self.assertNotIn('        -id "$client_window"', window)
         self.assertIn('-listen 127.0.0.1', window)
         self.assertIn('-localhost', window)
         self.assertNotIn('-viewonly', window)
@@ -27,7 +28,7 @@ class ConsoleFocusTests(unittest.TestCase):
 case "$*" in
   *search*gameviewer*) printf '100\\n200\\n300\\n';;
   *getwindowname*100*) printf '网易UU远程\\n';;
-  *getwindowname*200*) printf 'winhome\\n';;
+  *getwindowname*200*) printf 'Remote session\\n';;
   *getwindowname*300*) printf 'GameViewer\\n';;
   *getwindowgeometry*100*) printf '  Geometry: 920x680\\n';;
   *getwindowgeometry*200*) printf '  Geometry: 1536x904\\n';;

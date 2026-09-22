@@ -65,6 +65,24 @@ notify_error() {
 mkdir -p "$state_dir"
 
 case "${1:-open}" in
+    control)
+        shift || true
+        if (($# != 0)); then
+            printf 'uu-remote control does not take options.\n' >&2
+            exit 2
+        fi
+        if [[ -z "${DISPLAY:-}" || ! -x /usr/bin/xmessage ]]; then
+            notify_error 'Control mode needs a visible Ubuntu desktop and xmessage.'
+            exit 1
+        fi
+        if ! /usr/bin/xmessage -center \
+            -title 'UU Remote Controller' \
+            -buttons 'Continue:0,Cancel:1' -default Cancel \
+            'Control mode temporarily disconnects this Ubuntu host from UU. If you are connected to this host through UU, choose Cancel. The host service restarts after you close the controller. Continue?'; then
+            exit 0
+        fi
+        exec "$0" login
+        ;;
     status)
         exec "${systemctl_user[@]}" status uu-remote-bridge.service --no-pager
         ;;
@@ -153,7 +171,7 @@ case "${1:-open}" in
         exec "$console_bin" open "$@"
         ;;
     *)
-        printf 'usage: uu-remote [open|console|login|status|network|repair-registry|restart|stop|logs|update|upgrade]\n' >&2
+        printf 'usage: uu-remote [open|control|console|login|status|network|repair-registry|restart|stop|logs|update|upgrade]\n' >&2
         exit 2
         ;;
 esac

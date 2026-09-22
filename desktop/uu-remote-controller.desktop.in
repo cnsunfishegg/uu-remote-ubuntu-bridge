@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=UU Remote Controller
+GenericName=Remote Desktop Controller
+Comment=Control another computer; this Ubuntu host pauses until the controller closes
+Exec=@EXEC@
+Icon=024B_GameViewer.0
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupNotify=true
+Keywords=UU;Remote;Controller;

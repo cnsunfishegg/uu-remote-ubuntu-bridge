@@ -46,10 +46,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-mingw-w64-x86-64-win32 \
             wine wine64 wine64-tools \
-            x11-utils xclip xvfb
+            x11-utils x11vnc xclip xvfb
 
       - name: Run unit and documentation tests
         run: python3 -m unittest discover -s tests -v
+
+      - name: Exercise controller popups and local VNC input
+        run: python3 scripts/test-controller-popups.py
 
       - name: Exercise the one-way controller clipboard boundary
         env:

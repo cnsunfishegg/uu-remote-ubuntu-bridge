@@ -48,6 +48,7 @@ case "$*" in
   *getwindowgeometry*100*) printf '  Geometry: 920x680\\n';;
   *getwindowgeometry*200*) printf '  Geometry: 1536x904\\n';;
   *getwindowgeometry*300*) printf '  Geometry: 96x136\\n';;
+  *getwindowgeometry*202*) printf 'WIDTH=1150\\nHEIGHT=790\\n';;
   *search*Ubuntu-Desktop-Relay*)
     [[ "$FOCUS_TEST_MODE" == rdp ]] || exit 1
     printf '101\\n';;
@@ -156,6 +157,19 @@ if kill -0 "$stuck" 2>/dev/null; then exit 1; fi
             calls.index("windowmap 200 windowactivate --sync 200"),
             calls.index("windowmap 202 windowactivate --sync 202"),
         )
+
+    def test_fit_scale_preserves_aspect_and_stays_inside_viewport(self):
+        for width, height in ((920, 680), (1920, 1080), (2560, 1600)):
+            with self.subTest(source=(width, height)):
+                result, _, _ = self.run_helpers(
+                    "vnc", f"viewer_fit_scale {width} {height}"
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                scale = float(result.stdout)
+                self.assertGreater(scale, 0)
+                self.assertLessEqual(width * scale, 1148)
+                self.assertLessEqual(height * scale, 790)
+                self.assertLess(min(1148 / width, 790 / height) - scale, 0.000002)
 
 
 if __name__ == "__main__":

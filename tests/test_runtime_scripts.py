@@ -479,7 +479,7 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn('-geometry "${client_width}x${client_height}"', console)
         self.assertIn('-clip "$initial_clip"', console)
         self.assertIn('-R "clip:$clip"', console)
-        self.assertIn('set_local_viewer_geometry "$width" "$height"', console)
+        self.assertIn('viewer_fit_scale "$width" "$height"', console)
         self.assertIn("/usr/bin/flock -n 9", console)
         self.assertIn("activate_existing_window", console)
         self.assertIn("restore_private_client_window", console)

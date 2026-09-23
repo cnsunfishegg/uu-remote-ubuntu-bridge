@@ -382,7 +382,14 @@ monitor_private_scene() {
     local screen_size=""
     local screen_width=0
     local source_fullscreen=false
-    local viewer_size=""
+    local viewer_window=""
+    local source_state=""
+    local previous_candidate=""
+    local iconic_candidate=""
+    local iconic_checks=0
+    local missing_checks=0
+    local selected_scale="1.000000"
+    local scale=""
     local viewer_fullscreen_owned=false
     local width=0
     local x=0
@@ -402,6 +409,58 @@ monitor_private_scene() {
     fi
     while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
         candidate="$(find_scene_window | /usr/bin/tail -n 1)"
+        viewer_window="$(find_local_viewer_window || true)"
+        # Closing UU hides it to Wine's tray. Do not leave a live black
+        # viewer behind. Allow a short gap for launcher/session replacement.
+        if [[ -z "$candidate" ]]; then
+            missing_checks=$((missing_checks + 1))
+            if ((missing_checks >= 4)) && [[ -n "$viewer_window" ]]; then
+                /usr/bin/wmctrl -ic "$(printf '0x%x' "$viewer_window")" \
+                    >/dev/null 2>&1 || true
+                return 0
+            fi
+            sleep 0.25
+            continue
+        fi
+        missing_checks=0
+        source_state="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" WM_STATE 2>/dev/null || true)"
+        if [[ "$source_state" == *'window state: Iconic'* ]]; then
+            # Wine briefly iconifies windows while destroying a session or
+            # dismissing its dialog. Remapping in that interval cancels the
+            # close and can resurrect a black/defunct session surface.
+            if [[ "$candidate" != "$iconic_candidate" ]]; then
+                iconic_candidate="$candidate"
+                iconic_checks=0
+            fi
+            iconic_checks=$((iconic_checks + 1))
+            if ((iconic_checks < 3)); then
+                sleep 0.25
+                continue
+            fi
+            # The inner minimize button operates on the private display.
+            # Minimize the real desktop window, then keep its source painted
+            # so either the taskbar or the app shortcut can restore it.
+            if [[ -n "$viewer_window" ]]; then
+                # Returning from a destroyed remote session selects the
+                # previously minimized launcher. That is a window switch,
+                # not a user request to minimize the outer app.
+                if [[ "$candidate" == "$previous_candidate" ]]; then
+                    /usr/bin/xdotool windowminimize "$viewer_window" \
+                        >/dev/null 2>&1 || true
+                fi
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+                    windowmap "$candidate" windowactivate "$candidate" \
+                    >/dev/null 2>&1 || true
+            fi
+            sleep 0.25
+            continue
+        fi
+        iconic_candidate=""
+        iconic_checks=0
+        previous_candidate="$candidate"
         geometry=""
         if [[ -n "$candidate" ]]; then
             geometry="$(
@@ -432,7 +491,7 @@ monitor_private_scene() {
                     -env "X11VNC_REMOTE=$window_remote_channel" \
                     -R "clip:$clip" >/dev/null 2>&1; then
                 selected_clip="$clip"
-                viewer_size=""
+                selected_scale=""
             fi
         fi
         source_fullscreen=false
@@ -461,14 +520,19 @@ monitor_private_scene() {
                 viewer_fullscreen_owned=false
             fi
         fi
-        if [[ "$source_fullscreen" == false &&
-              "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ &&
-              "${width}x${height}" != "$viewer_size" ]]; then
-            if set_local_viewer_geometry "$width" "$height"; then
-                viewer_size="${width}x${height}"
+        # Fit the full source into the actual viewport, including when the
+        # user resizes/maximizes the outer window. UU's launcher has a fixed
+        # layout, so changing its X window dimensions cannot implement this.
+        scale="$(viewer_fit_scale "$width" "$height" || true)"
+        if [[ -n "$scale" && "$scale" != "$selected_scale" ]]; then
+            if /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" /usr/bin/x11vnc \
+                -env "X11VNC_REMOTE=$window_remote_channel" \
+                -R "scale:$scale" >/dev/null 2>&1; then
+                selected_scale="$scale"
             fi
         fi
-        sleep 0.5
+        sleep 0.25
     done
 }
 
@@ -609,6 +673,33 @@ set_local_viewer_geometry() {
         -e "0,$x,$y,$width,$height" >/dev/null 2>&1
 }
 
+viewer_fit_scale() {
+    local source_width="$1" source_height="$2"
+    local window="" geometry="" viewport_width="" viewport_height=""
+    [[ "$source_width" =~ ^[1-9][0-9]*$ &&
+       "$source_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    window="$(find_local_viewer_window)" || return 1
+    geometry="$(/usr/bin/xdotool getwindowgeometry --shell "$window" \
+        2>/dev/null)" || return 1
+    viewport_width="$(sed -n 's/^WIDTH=//p' <<<"$geometry")"
+    viewport_height="$(sed -n 's/^HEIGHT=//p' <<<"$geometry")"
+    [[ "$viewport_width" =~ ^[1-9][0-9]*$ &&
+       "$viewport_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    # x11vnc rounds scaled width up to a multiple of four. Reserve those
+    # pixels to avoid a scrollbar which itself reduces the viewport.
+    /usr/bin/awk -v sw="$source_width" -v sh="$source_height" \
+        -v vw="$viewport_width" -v vh="$viewport_height" 'BEGIN {
+            vw = int(vw / 4) * 4;
+            s = vw / sw; if (vh / sh < s) s = vh / sh;
+            printf "%.6f\n", int(s * 1000000) / 1000000;
+        }'
+}
+
+wake_private_client() {
+    /usr/bin/timeout 8 "$HOME/.local/bin/uu-remote" wake-private \
+        >>"$state_dir/client-wake.log" 2>&1
+}
+
 restore_private_client_window() {
     local client_window=""
 
@@ -619,6 +710,14 @@ restore_private_client_window() {
     # so the DISPLAY and XAUTHORITY values remain available to xdotool.
     discover_bridge || return 1
     client_window="$(find_scene_window | /usr/bin/tail -n 1)"
+    if [[ -z "$client_window" ]]; then
+        wake_private_client || return 1
+        for _ in {1..40}; do
+            client_window="$(find_scene_window | /usr/bin/tail -n 1)"
+            [[ -n "$client_window" ]] && break
+            sleep 0.1
+        done
+    fi
     [[ -n "$client_window" ]] || return 1
     /usr/bin/env DISPLAY="$bridge_display" \
         XAUTHORITY="$bridge_xauthority" \
@@ -831,6 +930,9 @@ open_window() {
         return 1
     fi
 
+    if [[ -z "$(find_scene_window)" ]]; then
+        wake_private_client || true
+    fi
     for _ in {1..120}; do
         client_window="$(find_scene_window | /usr/bin/tail -n 1)"
         [[ -n "$client_window" ]] && break

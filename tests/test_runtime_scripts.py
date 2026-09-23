@@ -476,6 +476,8 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertNotIn('-sid "$client_window"', console)
         self.assertNotIn('-R "sid:$candidate"', console)
         self.assertIn('monitor_private_scene &', console)
+        self.assertIn('-geometry "${client_width}x${client_height}"', console)
+        self.assertIn('windowmove "$client_window" 0 0', console)
         self.assertIn("/usr/bin/flock -n 9", console)
         self.assertIn("activate_existing_window", console)
         self.assertIn("cleanup_window", console)

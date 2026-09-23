@@ -22,6 +22,8 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertNotIn('-nomouse', window)
         self.assertNotIn('-nokeyboard', window)
         self.assertIn('monitor_private_scene &', window)
+        self.assertIn('-geometry "${client_width}x${client_height}"', window)
+        self.assertIn('windowmove "$client_window" 0 0', window)
         self.assertNotIn('X11VNC_REMOTE=', window)
         self.assertNotIn('-R "sid:', window)
         self.assertIn('stop_window_child "$window_vnc_pid"', SOURCE)

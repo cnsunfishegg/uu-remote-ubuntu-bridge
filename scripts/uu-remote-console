@@ -344,6 +344,20 @@ monitor_private_scene() {
               "$geometry" == *$'\n'"HEIGHT=$screen_height"$'\n'* ]]; then
             source_fullscreen=true
         fi
+        # The VNC server deliberately exposes the stable root scene. Keep a
+        # normal-sized UU window at the root origin so TigerVNC can show the
+        # complete launcher in its small viewport without expanding to the
+        # whole monitor (which also confuses some Quickshell layouts).
+        if [[ "$source_fullscreen" == false && -n "$candidate" &&
+              -n "$geometry" ]]; then
+            if [[ "$geometry" != *$'\nX=0\n'* ||
+                  "$geometry" != *$'\nY=0\n'* ]]; then
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/xdotool windowmove "$candidate" 0 0 \
+                        >/dev/null 2>&1 || true
+            fi
+        fi
         if [[ "$source_fullscreen" == true &&
               "$viewer_fullscreen_owned" == false ]]; then
             if set_local_viewer_fullscreen add; then
@@ -625,6 +639,9 @@ serve_relay_vnc() {
 
 open_window() {
     local client_window=""
+    local client_geometry=""
+    local client_height=680
+    local client_width=920
     local command
     local ready=false
     local viewer_status=0
@@ -670,6 +687,33 @@ open_window() {
         notify_error 'The UU management window did not become ready.'
         return 1
     fi
+    client_geometry="$(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool getwindowgeometry --shell "$client_window" \
+                2>/dev/null || true
+    )"
+    if [[ "$client_geometry" == *$'\nWIDTH='* &&
+          "$client_geometry" == *$'\nHEIGHT='* ]]; then
+        client_width="$(
+            /usr/bin/sed -n 's/^WIDTH=\([0-9]\+\)$/\1/p' \
+                <<<"$client_geometry" | /usr/bin/head -n 1
+        )"
+        client_height="$(
+            /usr/bin/sed -n 's/^HEIGHT=\([0-9]\+\)$/\1/p' \
+                <<<"$client_geometry" | /usr/bin/head -n 1
+        )"
+    fi
+    if [[ ! "$client_width" =~ ^[0-9]+$ ||
+          ! "$client_height" =~ ^[0-9]+$ ||
+          "$client_width" -lt 400 || "$client_height" -lt 300 ]]; then
+        client_width=920
+        client_height=680
+    fi
+    /usr/bin/env DISPLAY="$bridge_display" \
+        XAUTHORITY="$bridge_xauthority" \
+        /usr/bin/xdotool windowmove "$client_window" 0 0 \
+            >/dev/null 2>&1 || true
     window_port="$(choose_window_port)" || {
         notify_error 'No free loopback port is available for the UU window.'
         return 1
@@ -724,6 +768,7 @@ open_window() {
 
     set +e
     /usr/bin/vncviewer \
+        -geometry "${client_width}x${client_height}" \
         -Shared=1 \
         -RemoteResize=0 \
         -ReconnectOnError=0 \

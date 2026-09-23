@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=UU Remote Protocol Handler
+Exec=@EXEC@
+Icon=024B_GameViewer.0
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/uuremote;
+Categories=Network;RemoteAccess;

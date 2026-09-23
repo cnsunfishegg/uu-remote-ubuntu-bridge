@@ -54,32 +54,6 @@ def framebuffer(
     return bytes(image)
 
 
-def wait_for_resize(
-    connection: socket.socket,
-    width: int,
-    height: int,
-    pixel_bytes: int,
-    expected: tuple[int, int],
-) -> None:
-    for _ in range(20):
-        connection.sendall(b"\x03\x01" + struct.pack(">HHHH", 0, 0, width, height))
-        header = receive(connection, 4)
-        if header[0] != 0:
-            raise RuntimeError("VNC did not send a framebuffer update")
-        for _ in range(struct.unpack(">H", header[2:4])[0]):
-            _, _, rect_width, rect_height, encoding = struct.unpack(
-                ">HHHHi", receive(connection, 12)
-            )
-            if encoding == -223:
-                if (rect_width, rect_height) != expected:
-                    raise RuntimeError("VNC resized to the wrong window dimensions")
-                return
-            if encoding != 0:
-                raise RuntimeError(f"unexpected VNC encoding: {encoding}")
-            receive(connection, rect_width * rect_height * pixel_bytes)
-    raise RuntimeError("VNC did not follow the new UU window dimensions")
-
-
 def wait_for_window(environment: dict[str, str], name: str) -> str:
     for _ in range(50):
         result = subprocess.run(
@@ -131,10 +105,8 @@ def main() -> None:
                 with socket.socket() as reservation:
                     reservation.bind(("127.0.0.1", 0))
                     port = reservation.getsockname()[1]
-                channel = f"UURB_TEST_WINDOW_{os.getpid()}"
                 vnc = subprocess.Popen(
-                    ["x11vnc", "-display", display, "-sid", window,
-                     "-env", f"X11VNC_REMOTE={channel}",
+                    ["x11vnc", "-display", display,
                      "-rfbport", str(port), "-listen", "127.0.0.1",
                      "-localhost", "-nopw", "-once", "-noxdamage",
                      "-nowf", "-noscr", "-quiet"],
@@ -168,6 +140,8 @@ def main() -> None:
                     connection.sendall(b"\x01")
                     server = receive(connection, 24)
                     width, height = struct.unpack(">HH", server[:4])
+                    if (width, height) != (800, 600):
+                        raise RuntimeError("VNC did not expose the stable root scene")
                     receive(connection, struct.unpack(">I", server[20:24])[0])
                     pixel_bytes = server[4] // 8
                     connection.sendall(
@@ -220,7 +194,7 @@ def main() -> None:
                         time.sleep(0.2)
                     if changed < len(before) // 100:
                         raise RuntimeError("separate popup was not visible in VNC")
-                    popup_sample = ((120 * width) + 120) * pixel_bytes
+                    popup_sample = ((180 * width) + 180) * pixel_bytes
                     popup_color = with_popup[popup_sample:popup_sample + pixel_bytes]
                     if not any(popup_color):
                         raise RuntimeError("test popup has no visible color")
@@ -243,7 +217,7 @@ def main() -> None:
                         raise RuntimeError("VNC did not update after main window hid")
                     if after_hiding_main[popup_sample:popup_sample + pixel_bytes] != popup_color:
                         raise RuntimeError("popup disappeared when the main window hid")
-                    print("VNC: main image, popup, hidden-main transition, mouse, keyboard passed")
+                    print("VNC: root scene, popup, hidden-main transition, mouse, keyboard passed")
 
                     remote_window = subprocess.Popen(
                         ["xev", "-name", "UU Remote Session Probe",
@@ -257,36 +231,34 @@ def main() -> None:
                         environment, "UU Remote Session Probe"
                     )
                     subprocess.run(
-                        ["x11vnc", "-display", display,
-                         "-env", f"X11VNC_REMOTE={channel}",
-                         "-R", f"sid:{remote_id}"],
+                        ["xdotool", "windowraise", remote_id],
                         env=environment,
                         check=True,
-                        capture_output=True,
                     )
-                    wait_for_resize(
-                        connection, width, height, pixel_bytes, (600, 400)
+                    time.sleep(0.5)
+                    remote_frame = framebuffer(
+                        connection, width, height, pixel_bytes, after_hiding_main
                     )
-                    remote_frame = framebuffer(connection, 600, 400, pixel_bytes)
-                    if not any(remote_frame):
-                        raise RuntimeError("retargeted remote-session image is black")
+                    if remote_frame == after_hiding_main:
+                        raise RuntimeError("remote-session window was not visible")
                     subprocess.run(
                         ["xdotool", "windowsize", remote_id, "700", "500"],
                         env=environment,
                         check=True,
                     )
-                    subprocess.run(
-                        ["x11vnc", "-display", display,
-                         "-env", f"X11VNC_REMOTE={channel}",
-                         "-R", f"sid:{remote_id}"],
-                        env=environment,
-                        check=True,
-                        capture_output=True,
+                    resized_frame = framebuffer(
+                        connection, width, height, pixel_bytes, remote_frame
                     )
-                    wait_for_resize(
-                        connection, 600, 400, pixel_bytes, (700, 500)
+                    if resized_frame == remote_frame:
+                        raise RuntimeError("remote-session resize was not visible")
+                    remote_window.terminate()
+                    remote_window.wait(timeout=3)
+                    returned_frame = framebuffer(
+                        connection, width, height, pixel_bytes, resized_frame
                     )
-                    print("VNC: remote-session switch and same-window resize passed")
+                    if returned_frame == resized_frame:
+                        raise RuntimeError("root scene did not survive session exit")
+                    print("VNC: session open, resize, and return-to-launcher continuity passed")
 
                 controller_environment = {
                     **environment,

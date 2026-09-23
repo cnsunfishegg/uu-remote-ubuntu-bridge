@@ -13,15 +13,17 @@ SOURCE = (Path(__file__).resolve().parents[1] / "scripts/uu-remote-console").rea
 class ConsoleFocusTests(unittest.TestCase):
     def test_local_window_keeps_bidirectional_input_on_loopback(self):
         window = SOURCE.split("open_window() {", 1)[1].split("serve_console() {", 1)[0]
-        self.assertIn('-sid "$client_window"', window)
+        self.assertIn('-display "$bridge_display"', window)
+        self.assertNotIn('-sid "$client_window"', window)
         self.assertNotIn('        -id "$client_window"', window)
         self.assertIn('-listen 127.0.0.1', window)
         self.assertIn('-localhost', window)
         self.assertNotIn('-viewonly', window)
         self.assertNotIn('-nomouse', window)
         self.assertNotIn('-nokeyboard', window)
-        self.assertIn('monitor_client_window "$client_window" &', window)
-        self.assertIn('X11VNC_REMOTE=$window_remote_channel', window)
+        self.assertIn('monitor_private_scene &', window)
+        self.assertNotIn('X11VNC_REMOTE=', window)
+        self.assertNotIn('-R "sid:', window)
         self.assertIn('stop_window_child "$window_vnc_pid"', SOURCE)
         self.assertIn('/usr/bin/flock -w 4 9', window)
 

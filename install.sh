@@ -717,7 +717,7 @@ esac
 
 export WINEPREFIX="$wine_prefix"
 export WINEDEBUG=-all
-export WINEDLLOVERRIDES='winedbg.exe=d;mscoree,mshtml='
+export WINEDLLOVERRIDES='winedbg.exe=d;winemenubuilder.exe=d;mscoree,mshtml='
 
 bridge_was_active=false
 if [[ "$prefix_only" == false ]] &&
@@ -1045,24 +1045,27 @@ install -m 0644 "$repo_dir/systemd/uu-keyring-unlock.service" \
 
 desktop_entry="$HOME/.local/share/applications/uu-remote.desktop"
 controller_entry="$HOME/.local/share/applications/uu-remote-controller.desktop"
+protocol_entry="$HOME/.local/share/applications/uu-remote-protocol.desktop"
 "$python_bin" - "$repo_dir/desktop/uu-remote.desktop.in" \
     "$desktop_entry" "$repo_dir/desktop/uu-remote-controller.desktop.in" \
-    "$controller_entry" "$HOME/.local/bin/uu-remote" <<'PY'
+    "$controller_entry" "$repo_dir/desktop/uu-remote-protocol.desktop.in" \
+    "$protocol_entry" "$HOME/.local/bin/uu-remote" <<'PY'
 import sys
 from pathlib import Path
 
-host_template, host_destination, controller_template, controller_destination, executable = map(Path, sys.argv[1:])
+host_template, host_destination, controller_template, controller_destination, protocol_template, protocol_destination, executable = map(Path, sys.argv[1:])
 escaped = str(executable).replace("\\", "\\\\").replace(" ", "\\ ")
 for template, destination, action in (
     (host_template, host_destination, "open"),
     (controller_template, controller_destination, "control"),
+    (protocol_template, protocol_destination, "protocol %u"),
 ):
     rendered = template.read_text(encoding="ascii").replace(
         "@EXEC@", f"{escaped} {action}"
     )
     destination.write_text(rendered, encoding="ascii")
 PY
-chmod 0644 "$desktop_entry" "$controller_entry"
+chmod 0644 "$desktop_entry" "$controller_entry" "$protocol_entry"
 if [[ -d "$HOME/Desktop" ]]; then
     desktop_shortcut="$HOME/Desktop/UU Remote.desktop"
     install -m 0755 "$desktop_entry" "$desktop_shortcut"
@@ -1176,6 +1179,19 @@ for shortcut in \
         archive_duplicate_shortcut "$shortcut"
     fi
 done
+wine_protocol_entry="$HOME/.local/share/applications/wine-protocol-uuremote.desktop"
+if [[ -f "$wine_protocol_entry" ]] &&
+   /usr/bin/grep -Fq 'x-scheme-handler/uuremote' "$wine_protocol_entry"; then
+    archive_duplicate_shortcut "$wine_protocol_entry"
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$HOME/.local/share/applications" \
+        >/dev/null 2>&1 || true
+fi
+if command -v xdg-mime >/dev/null 2>&1; then
+    xdg-mime default uu-remote-protocol.desktop \
+        x-scheme-handler/uuremote || true
+fi
 
 if [[ "$start_service" == true ]]; then
     "${systemctl_user[@]}" restart uu-remote-bridge.service

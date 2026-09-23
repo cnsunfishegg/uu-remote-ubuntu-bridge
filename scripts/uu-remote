@@ -27,12 +27,12 @@ if [[ "$uu_audio_setting" == off ]]; then
         exit 1
     }
     export ALSA_CONFIG_PATH="$audio_alsa_config"
-    export WINEDLLOVERRIDES='winebth.sys=d;winepulse.drv=d;winedbg.exe=d;mscoree,mshtml='
+    export WINEDLLOVERRIDES='winebth.sys=d;winepulse.drv=d;winedbg.exe=d;winemenubuilder.exe=d;mscoree,mshtml='
     export PULSE_SERVER="unix:${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge/no-pulse"
     export PIPEWIRE_REMOTE=uu-remote-disabled
     export SDL_AUDIODRIVER=dummy
 elif [[ "$uu_audio_setting" == system ]]; then
-    export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;mscoree,mshtml='
+    export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;winemenubuilder.exe=d;mscoree,mshtml='
 else
     printf 'UU Remote audio mode must be off or system.\n' >&2
     exit 2
@@ -162,6 +162,43 @@ case "${1:-open}" in
         fi
         exec "$console_bin" window "$@"
         ;;
+    protocol)
+        shift || true
+        if (($# != 1)) || [[ "${1,,}" != uuremote:* ]]; then
+            printf 'usage: uu-remote protocol uuremote://...\n' >&2
+            exit 2
+        fi
+        if [[ ! -f "$app_dir/GameViewer.exe" ]]; then
+            notify_error 'UU Remote is not installed in the bridge Wine prefix.'
+            exit 1
+        fi
+        "${systemctl_user[@]}" start uu-remote-bridge.service
+        bridge_runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge"
+        bridge_display_file="$bridge_runtime_dir/private-display"
+        bridge_xauthority="$bridge_runtime_dir/Xauthority"
+        bridge_display=""
+        for _ in {1..160}; do
+            if [[ -r "$bridge_display_file" && -r "$bridge_xauthority" ]]; then
+                read -r bridge_display <"$bridge_display_file" || true
+                if [[ "$bridge_display" =~ ^:(0|[1-9][0-9]{0,2})$ ]] &&
+                   /usr/bin/env DISPLAY="$bridge_display" \
+                       XAUTHORITY="$bridge_xauthority" \
+                       /usr/bin/xdpyinfo >/dev/null 2>&1; then
+                    break
+                fi
+            fi
+            bridge_display=""
+            sleep 0.25
+        done
+        if [[ -z "$bridge_display" ]]; then
+            notify_error 'The UU private desktop did not become ready.'
+            exit 1
+        fi
+        cd "$app_dir"
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            "$wine_bin" start "$1" >>"$state_dir/protocol.log" 2>&1
+        ;;
     console)
         shift || true
         if [[ ! -x "$console_bin" ]]; then
@@ -171,7 +208,7 @@ case "${1:-open}" in
         exec "$console_bin" open "$@"
         ;;
     *)
-        printf 'usage: uu-remote [open|control|console|login|status|network|repair-registry|restart|stop|logs|update|upgrade]\n' >&2
+        printf 'usage: uu-remote [open|control|console|protocol|login|status|network|repair-registry|restart|stop|logs|update|upgrade]\n' >&2
         exit 2
         ;;
 esac

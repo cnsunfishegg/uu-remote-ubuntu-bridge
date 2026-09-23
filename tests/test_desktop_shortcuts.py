@@ -35,6 +35,12 @@ class DesktopShortcutTests(unittest.TestCase):
             menu.write_text(
                 f'Exec=env "WINEPREFIX={listed_prefix}" wine UU远程.lnk\n'
             )
+            protocol = home / ".local/share/applications/wine-protocol-uuremote.desktop"
+            protocol.parent.mkdir(parents=True, exist_ok=True)
+            protocol.write_text(
+                f'Exec=env "WINEPREFIX={listed_prefix}" wine start %u\n'
+                'MimeType=x-scheme-handler/uuremote;\n'
+            )
             primary = desktop / "UU Remote.desktop"
             primary.write_text("Exec=uu-remote open\n")
             environment = os.environ | {
@@ -55,7 +61,7 @@ class DesktopShortcutTests(unittest.TestCase):
             ) if archive.exists() else []
             remaining = sorted(
                 str(path.relative_to(home))
-                for path in (controller, direct, menu, primary)
+                for path in (controller, direct, menu, protocol, primary)
                 if path.exists()
             )
             return archived, remaining
@@ -64,13 +70,21 @@ class DesktopShortcutTests(unittest.TestCase):
         archived, remaining = self.run_archive(wine_matches=True)
         self.assertEqual(
             archived,
-            ["UU Remote Controller.desktop", "UU远程.desktop", "menu-UU远程.desktop"],
+            [
+                "UU Remote Controller.desktop",
+                "UU远程.desktop",
+                "menu-UU远程.desktop",
+                "wine-protocol-uuremote.desktop",
+            ],
         )
         self.assertEqual(remaining, ["Desktop/UU Remote.desktop"])
 
     def test_preserves_unrelated_wine_shortcuts(self):
         archived, remaining = self.run_archive(wine_matches=False)
-        self.assertEqual(archived, ["UU Remote Controller.desktop"])
+        self.assertEqual(
+            archived,
+            ["UU Remote Controller.desktop", "wine-protocol-uuremote.desktop"],
+        )
         self.assertEqual(
             remaining,
             [

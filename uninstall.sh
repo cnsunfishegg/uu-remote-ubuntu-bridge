@@ -160,6 +160,7 @@ rm -f \
     "$HOME/.config/systemd/user/uu-remote-console.service" \
     "$HOME/.local/share/applications/uu-remote.desktop" \
     "$HOME/.local/share/applications/uu-remote-controller.desktop" \
+    "$HOME/.local/share/applications/uu-remote-protocol.desktop" \
     "$HOME/Desktop/UU Remote.desktop" \
     "$HOME/Desktop/UU Remote Controller.desktop"
 rm -rf \

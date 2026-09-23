@@ -184,13 +184,13 @@ if [[ "$uu_audio_setting" == off ]]; then
     # prefix on its null ALSA backend, and make direct PulseAudio/PipeWire/SDL
     # discovery fail closed so a vendor capture path cannot reach a physical
     # microphone. Video and input remain intact.
-    export WINEDLLOVERRIDES='winebth.sys=d;winepulse.drv=d;winedbg.exe=d;mscoree,mshtml='
+    export WINEDLLOVERRIDES='winebth.sys=d;winepulse.drv=d;winedbg.exe=d;winemenubuilder.exe=d;mscoree,mshtml='
     export ALSA_CONFIG_PATH="$audio_alsa_config"
     export PULSE_SERVER="unix:${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge/no-pulse"
     export PIPEWIRE_REMOTE=uu-remote-disabled
     export SDL_AUDIODRIVER=dummy
 else
-    export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;mscoree,mshtml='
+    export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;winemenubuilder.exe=d;mscoree,mshtml='
 fi
 export OPENSSL_MODULES='C:\Program Files\FreeRDP\ossl-modules'
 export SDL_RENDER_DRIVER=software

@@ -186,7 +186,7 @@ class RuntimeScriptTests(unittest.TestCase):
             launcher,
         )
         self.assertIn(
-            "export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;mscoree,mshtml='",
+            "export WINEDLLOVERRIDES='winebth.sys=d;winedbg.exe=d;winemenubuilder.exe=d;mscoree,mshtml='",
             launcher,
         )
         self.assertIn(
@@ -425,6 +425,9 @@ class RuntimeScriptTests(unittest.TestCase):
         controller_desktop = (
             REPOSITORY / "desktop" / "uu-remote-controller.desktop.in"
         ).read_text()
+        protocol_desktop = (
+            REPOSITORY / "desktop" / "uu-remote-protocol.desktop.in"
+        ).read_text()
         digest = (REPOSITORY / "scripts" / "runtime-source-digest").read_text()
 
         self.assertIn('"127.0.0.1:$web_port"', console)
@@ -448,11 +451,17 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn("Exec=@EXEC@", desktop)
         self.assertIn("StartupWMClass=TigerVNC Viewer", desktop)
         self.assertNotIn("noVNC", desktop)
-        self.assertIn('"$controller_entry" "$HOME/.local/bin/uu-remote"', installer)
+        self.assertIn('"$protocol_entry" "$HOME/.local/bin/uu-remote"', installer)
         self.assertIn('Name=UU Remote Controller', controller_desktop)
         self.assertIn('Exec=@EXEC@', controller_desktop)
         self.assertIn('NoDisplay=true', controller_desktop)
         self.assertIn('(controller_template, controller_destination, "control")', installer)
+        self.assertIn('(protocol_template, protocol_destination, "protocol %u")', installer)
+        self.assertIn('MimeType=x-scheme-handler/uuremote;', protocol_desktop)
+        self.assertIn('NoDisplay=true', protocol_desktop)
+        self.assertIn('xdg-mime default uu-remote-protocol.desktop', installer)
+        self.assertIn('archive_duplicate_shortcut "$wine_protocol_entry"', installer)
+        self.assertIn('winemenubuilder.exe=d', installer)
         self.assertNotIn('install -m 0755 "$controller_entry" "$controller_shortcut"', installer)
         self.assertIn('archive_duplicate_shortcut "$old_controller_shortcut"', installer)
         self.assertIn('exec "$console_bin" window "$@"', command)
@@ -462,9 +471,11 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertNotIn("activate_physical_client", command)
         self.assertNotIn("open-client", command)
         self.assertIn('exec "$console_bin" open "$@"', command)
-        self.assertIn('-sid "$client_window"', console)
-        self.assertIn('-R "sid:$candidate"', console)
-        self.assertIn('monitor_client_window "$client_window" &', console)
+        self.assertIn('    protocol)', command)
+        self.assertIn('"$wine_bin" start "$1"', command)
+        self.assertNotIn('-sid "$client_window"', console)
+        self.assertNotIn('-R "sid:$candidate"', console)
+        self.assertIn('monitor_private_scene &', console)
         self.assertIn("/usr/bin/flock -n 9", console)
         self.assertIn("activate_existing_window", console)
         self.assertIn("cleanup_window", console)
@@ -478,6 +489,7 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn("systemd/uu-remote-console.service", digest)
         self.assertIn("desktop/uu-remote.desktop.in", digest)
         self.assertIn("desktop/uu-remote-controller.desktop.in", digest)
+        self.assertIn("desktop/uu-remote-protocol.desktop.in", digest)
 
         environment = os.environ | {
             "UURB_CONSOLE_VNC_PORT": "5926",

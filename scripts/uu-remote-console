@@ -41,7 +41,6 @@ vnc_pid=""
 websockify_pid=""
 window_vnc_pid=""
 window_monitor_pid=""
-window_remote_channel=""
 relay_focus_pid=""
 
 notify_error() {
@@ -298,11 +297,9 @@ stop_window_child() {
     wait "$pid" 2>/dev/null || true
 }
 
-monitor_client_window() {
-    local selected="$1"
+monitor_private_scene() {
     local candidate=""
     local geometry=""
-    local selected_geometry=""
     local screen_height=0
     local screen_size=""
     local screen_width=0
@@ -321,12 +318,6 @@ monitor_client_window() {
         screen_width="${BASH_REMATCH[1]}"
         screen_height="${BASH_REMATCH[2]}"
     fi
-    selected_geometry="$(
-        /usr/bin/env DISPLAY="$bridge_display" \
-            XAUTHORITY="$bridge_xauthority" \
-            /usr/bin/xdotool getwindowgeometry --shell "$selected" 2>/dev/null || true
-    )"
-
     while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
         candidate="$(find_client_window | /usr/bin/tail -n 1)"
         geometry=""
@@ -337,18 +328,6 @@ monitor_client_window() {
                     /usr/bin/xdotool getwindowgeometry --shell "$candidate" \
                         2>/dev/null || true
             )"
-        fi
-        if [[ -n "$candidate" && -n "$geometry" &&
-              ( "$candidate" != "$selected" ||
-                "$geometry" != "$selected_geometry" ) ]]; then
-            if /usr/bin/env DISPLAY="$bridge_display" \
-                XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/x11vnc \
-                    -env "X11VNC_REMOTE=$window_remote_channel" \
-                    -R "sid:$candidate" >/dev/null 2>&1; then
-                selected="$candidate"
-                selected_geometry="$geometry"
-            fi
         fi
         source_fullscreen=false
         if [[ -n "$candidate" ]] &&
@@ -695,8 +674,6 @@ open_window() {
         notify_error 'No free loopback port is available for the UU window.'
         return 1
     }
-    window_remote_channel="UURB_WINDOW_${UID}_${window_port}_$$"
-
     printf '%s\n' "$window_port" >"$runtime_dir/window.port"
     chmod 0600 "$runtime_dir/window.port"
     trap cleanup_window EXIT
@@ -704,15 +681,15 @@ open_window() {
     trap 'exit 143' TERM HUP
     focus_client
 
-    # Mirror the root scene at the current UU window's coordinates. Unlike
-    # -id, -sid can show separate popups inside this rectangle. The monitor
-    # retargets this same VNC connection when UU opens a larger session window.
+    # Mirror the complete private UU desktop, not one disposable child
+    # window. UU destroys and replaces its management window when a remote
+    # session starts; binding x11vnc to that child used to terminate the local
+    # viewer at exactly that transition. The stable root scene keeps the
+    # launcher, session, popups, and return-to-launcher flow in one viewer.
     /usr/bin/env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 \
         /usr/bin/x11vnc \
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
-        -sid "$client_window" \
-        -env "X11VNC_REMOTE=$window_remote_channel" \
         -rfbport "$window_port" \
         -listen 127.0.0.1 \
         -localhost \
@@ -742,7 +719,7 @@ open_window() {
         return 1
     fi
 
-    monitor_client_window "$client_window" &
+    monitor_private_scene &
     window_monitor_pid=$!
 
     set +e

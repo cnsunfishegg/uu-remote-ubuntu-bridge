@@ -54,6 +54,9 @@ case "$*" in
   *search*TigerVNC*|*search*realvnc-vncviewer*)
     [[ "$FOCUS_TEST_MODE" == vnc ]] || exit 1
     printf '202\\n203\\n';;
+  *windowmap*200*)
+    [[ "$DISPLAY" == :99 && "$XAUTHORITY" == /none ]] || exit 9
+    printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG";;
   *) printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG";;
 esac
 ''')
@@ -143,6 +146,16 @@ if kill -0 "$stuck" 2>/dev/null; then exit 1; fi
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("-ir 0xca -b add,fullscreen", calls)
+
+    def test_reopening_iconified_viewer_restores_both_window_layers(self):
+        result, calls, _ = self.run_helpers("vnc", "activate_existing_window")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("windowmap 200 windowactivate --sync 200", calls)
+        self.assertIn("windowmap 202 windowactivate --sync 202", calls)
+        self.assertLess(
+            calls.index("windowmap 200 windowactivate --sync 200"),
+            calls.index("windowmap 202 windowactivate --sync 202"),
+        )
 
 
 if __name__ == "__main__":

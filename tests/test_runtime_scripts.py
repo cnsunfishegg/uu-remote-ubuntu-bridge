@@ -472,7 +472,7 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertNotIn("open-client", command)
         self.assertIn('exec "$console_bin" open "$@"', command)
         self.assertIn('    protocol)', command)
-        self.assertIn('"$wine_bin" start "$1"', command)
+        self.assertIn('"$wine_bin" "$app_dir/GameViewer.exe" "$1"', command)
         self.assertNotIn('-sid "$client_window"', console)
         self.assertNotIn('-R "sid:$candidate"', console)
         self.assertIn('monitor_private_scene "$initial_clip" &', console)
@@ -633,6 +633,7 @@ log() { printf '%s\\n' "$*"; }
 (sleep 0.1; exit "$1") &
 xvfb_pid=$!
 openbox_pid=$xvfb_pid
+controller_openbox_pid=$xvfb_pid
 winlogon_pid=$xvfb_pid
 input_broker_pid=$xvfb_pid
 server_supervisor_pid=$xvfb_pid

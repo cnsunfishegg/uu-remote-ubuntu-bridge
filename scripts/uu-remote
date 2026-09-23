@@ -169,10 +169,15 @@ case "${1:-open}" in
         bridge_runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-bridge"
         read -r bridge_display <"$bridge_runtime_dir/private-display"
         [[ "$bridge_display" =~ ^:(0|[1-9][0-9]{0,2})$ ]] || exit 1
+        if [[ -r "$bridge_runtime_dir/controller-display" ]]; then
+            read -r controller_display <"$bridge_runtime_dir/controller-display"
+            [[ "$controller_display" == "$bridge_display.1" ]] || exit 1
+            bridge_display="$controller_display"
+        fi
         cd "$app_dir"
         exec /usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_runtime_dir/Xauthority" \
-            "$wine_bin" start /unix "$app_dir/GameViewer.exe"
+            "$wine_bin" "$app_dir/GameViewer.exe"
         ;;
     protocol)
         shift || true
@@ -206,10 +211,16 @@ case "${1:-open}" in
             notify_error 'The UU private desktop did not become ready.'
             exit 1
         fi
+        if [[ -r "$bridge_runtime_dir/controller-display" ]]; then
+            read -r controller_display <"$bridge_runtime_dir/controller-display"
+            [[ "$controller_display" == "$bridge_display.1" ]] || exit 1
+            bridge_display="$controller_display"
+        fi
         cd "$app_dir"
         /usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" \
-            "$wine_bin" start "$1" >>"$state_dir/protocol.log" 2>&1
+            "$wine_bin" "$app_dir/GameViewer.exe" "$1" \
+                >>"$state_dir/protocol.log" 2>&1
         ;;
     console)
         shift || true

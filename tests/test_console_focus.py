@@ -23,6 +23,7 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertNotIn('-nokeyboard', window)
         self.assertIn('-geometry "${client_width}x${client_height}"', window)
         self.assertIn('-clip "$initial_clip"', window)
+        self.assertIn('-xwarppointer', window)
         self.assertIn('monitor_private_scene "$initial_clip" &', window)
         self.assertIn('X11VNC_REMOTE=$window_remote_channel', window)
         self.assertIn('-R "clip:$clip"', SOURCE)
@@ -117,6 +118,29 @@ printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG"
         self.assertNotIn("windowactivate 202", calls)
         self.assertFalse(lease)
 
+    def test_isolated_controller_never_minimizes_or_leases_host(self):
+        result, calls, lease = self.run_helpers("vnc", '''
+mkdir -p "$bridge_runtime_dir"
+printf ':99.1\\n' >"$controller_display_file"
+display_ready() { [[ "$1" == :99.1 ]]; }
+focus_client
+release_client
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(lease)
+        self.assertNotIn("windowminimize", calls)
+        self.assertNotIn("windowactivate 203", calls)
+
+    def test_invalid_controller_display_fails_closed(self):
+        result, _, lease = self.run_helpers("none", '''
+mkdir -p "$bridge_runtime_dir"
+printf ':0\\n' >"$controller_display_file"
+display_ready() { return 0; }
+discover_controller
+''')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(lease)
+
     def test_selects_visible_large_window_over_iconified_shell(self):
         result, _, _ = self.run_helpers("none", "find_client_window")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -146,7 +170,9 @@ if kill -0 "$stuck" 2>/dev/null; then exit 1; fi
             "vnc", "set_local_viewer_fullscreen add"
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("-ir 0xca -b add,fullscreen", calls)
+        self.assertIn("-ir 0xca -b remove,fullscreen", calls)
+        self.assertIn("-ir 0xca -b add,maximized_vert,maximized_horz", calls)
+        self.assertNotIn("-b add,fullscreen", calls)
 
     def test_reopening_iconified_viewer_restores_both_window_layers(self):
         result, calls, _ = self.run_helpers("vnc", "activate_existing_window")

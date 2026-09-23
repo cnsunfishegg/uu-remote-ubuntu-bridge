@@ -54,3 +54,53 @@ Platform: installed Ubuntu 26.04 X11 desktop with Quickshell; approved UU
 
 Remote keyboard typing, long-duration connections, Wayland, multiple monitors,
 and other remote operating systems are not covered by this live session.
+
+## Follow-up: one set of controls and host/controller isolation
+
+The earlier lifecycle fix did **not** protect incoming host capture. Opening
+the local console minimized the physical-desktop relay on the same canvas;
+closing/minimizing one surface could therefore affect the other direction.
+
+For the native VNC + direct X11-input profile, the host stays on screen 0 and
+the UU GUI now uses screen 1 of the authenticated private X server. RDP and
+non-direct-input profiles retain their legacy canvas. Two entirely separate
+X servers sharing Wine's default desktop were tested and rejected: Wine tried
+to use window IDs on the wrong server and the real UU GUI exited with BadWindow.
+That experimental arrangement is not installed or shipped.
+
+Screens still share X input, so canvas separation alone is insufficient:
+
+- The host VNC viewer is view-only with keyboard grabs disabled; incoming
+  mouse/keyboard still use the authenticated direct physical-X11 helper.
+- Host supervision maps/raises the relay without stealing controller focus.
+- Physical VNC cursor positions are not reflected back into the private X
+  pointer. The physical cursor is rendered into the host framebuffer instead.
+- The local viewer disables pointer-position feedback and uses XWarpPointer
+  to target the correct screen, including when the other screen has focus.
+
+The local viewer has no second titlebar. `_MOTIF_WM_HINTS` uses its own atom
+as its property type; CARDINAL was accepted by Openbox but ignored by XFWM.
+Live XFWM frame extents were checked as `0, 0, 0, 0`. Minimize maps to the
+taskbar. The borderless viewport can be moved with the desktop's Alt-drag
+gesture; private titlebar motion is not synchronized to the outer window.
+The inner maximize uses the physical desktop's maximized work area, not true
+fullscreen: Quickshell's always-on-top panel otherwise covers UU's only
+restore/close buttons. An isolated dock/strut fixture checks this explicitly.
+
+Follow-up validation:
+
+- Real inner minimize produced `Iconic` on the local viewer while the host
+  relay stayed `Normal`; reopening returned to `Normal`. Real inner close
+  removed the local viewer, and reopening restored the painted launcher.
+- The isolated lifecycle test now runs **both** VNC directions, checks actual
+  decoration extents and precise scaled pointer coordinates, and verifies an
+  unobscured physical-desktop patch stays visible through every transition.
+- `scripts/test-x11-mouse.sh` passed ordered mouse/wheel and Shift+A/Left
+  press/release records through the Wine broker into the X11 helper.
+- A live Windows GDI pixel probe agreed with the private host X11 framebuffer.
+  This is a local capture check, not a real Mac-to-Linux stream acceptance.
+- Unit tests: 171 total, 170 passed, 1 skipped. Audio policy remains off.
+
+The incoming path still needs a real Mac-to-Linux reconnect acceptance test.
+Mac Caps Lock/input-method switching was neither modified nor certified.
+No release was published from this check.

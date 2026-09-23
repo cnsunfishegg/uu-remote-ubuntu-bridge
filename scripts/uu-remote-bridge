@@ -228,6 +228,7 @@ x11_input_ready_file="$runtime_dir/x11-input.port"
 x11_clipboard_ready_file="$runtime_dir/x11-clipboard.port"
 terminal_ready_file="$runtime_dir/terminal.port"
 private_display_file="$runtime_dir/private-display"
+controller_display_file="$runtime_dir/controller-display"
 console_focus_file="$runtime_dir/console-focus"
 wine_stop_bin="$HOME/.local/libexec/uu-remote-stop-wine-prefix"
 
@@ -240,6 +241,7 @@ fi
 
 xvfb_pid=""
 openbox_pid=""
+controller_openbox_pid=""
 grd_pid=""
 freerdp_pid=""
 desktop_x11vnc_pid=""
@@ -480,6 +482,7 @@ cleanup() {
         "$desktop_x11vnc_pid" \
         "$grd_pid" \
         "$openbox_pid" \
+        "$controller_openbox_pid" \
         "$xvfb_pid"; do
         if [[ -n "$pid" ]]; then
             kill "$pid" >/dev/null 2>&1 || true
@@ -501,6 +504,7 @@ cleanup() {
             "$desktop_x11vnc_pid" \
             "$grd_pid" \
             "$openbox_pid" \
+            "$controller_openbox_pid" \
             "$xvfb_pid"; do
             if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
                 processes_alive=true
@@ -524,6 +528,7 @@ cleanup() {
         "$desktop_x11vnc_pid" \
         "$grd_pid" \
         "$openbox_pid" \
+        "$controller_openbox_pid" \
         "$xvfb_pid"; do
         if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
             kill -KILL "$pid" >/dev/null 2>&1 || true
@@ -556,6 +561,7 @@ cleanup() {
         "$x11_clipboard_ready_file" \
         "$terminal_ready_file" \
         "$private_display_file" \
+        "$controller_display_file" \
         "$console_focus_file"
 }
 
@@ -863,6 +869,8 @@ start_desktop_relay() {
             -nopw \
             -forever \
             -shared \
+            -nocursorpos \
+            -nocursorshape \
             -repeat \
             -nobell \
             -modtweak \
@@ -1232,6 +1240,8 @@ export XAUTHORITY="$xauth_file"
 
 /usr/bin/Xvfb "$DISPLAY" \
     -screen 0 "${resolution}x24" \
+    -screen 1 "${resolution}x24" \
+    -xinerama \
     -dpi 96 \
     -nolisten tcp \
     -noreset \
@@ -1256,10 +1266,18 @@ private_display_tmp="$private_display_file.$$"
 printf '%s\n' "$DISPLAY" >"$private_display_tmp"
 chmod 0600 "$private_display_tmp"
 mv "$private_display_tmp" "$private_display_file"
-
 /usr/bin/openbox >>"$state_dir/openbox.log" 2>&1 &
 openbox_pid=$!
 start_x11_input_helper
+controller_display="$DISPLAY"
+if [[ "$desktop_relay" == vnc && "$active_keyboard_route" == x11 ]]; then
+    controller_display="$DISPLAY.1"
+    /usr/bin/env DISPLAY="$controller_display" /usr/bin/openbox \
+        >>"$state_dir/controller-openbox.log" 2>&1 &
+    controller_openbox_pid=$!
+    printf '%s\n' "$controller_display" >"$controller_display_file"
+    chmod 0600 "$controller_display_file"
+fi
 start_x11_clipboard_helper
 
 if [[ "$desktop_relay" == rdp && ! -f "$freerdp_exe" ]]; then
@@ -1495,11 +1513,19 @@ if [[ "$desktop_relay" == rdp ]]; then
     )"
 else
     desktop_vnc_display=$((desktop_vnc_port - 5900))
+    relay_view_only=0
+    # X screens share keyboard focus. With direct physical input the relay
+    # is display-only; a global grab would steal the controller's keys.
+    if [[ "$active_keyboard_route" == x11 ]]; then
+        vnc_grab_keyboard_value=0
+        relay_view_only=1
+    fi
     /usr/bin/env \
         DBUS_SESSION_BUS_ADDRESS=unix:path=/dev/null \
         /usr/bin/vncviewer \
         -FullScreen=1 \
         -Shared=1 \
+        -ViewOnly="$relay_view_only" \
         -RemoteResize=0 \
         -ReconnectOnError=0 \
         -AlertOnFatalError=0 \
@@ -1553,8 +1579,12 @@ bootstrap_account() {
     "$wine_bin" "$service_control_exe" \
         GameViewerService 133 \
         >>"$state_dir/service-control.log" 2>&1 || true
-    "$wine_bin" start /unix "$uu_app_dir/GameViewer.exe" \
-        >>"$state_dir/client-bootstrap.log" 2>&1 || true
+    # Keep the GUI on a separate X screen, but in the same Wine prefix for
+    # account IPC. `wine start` delegates to explorer on the host display;
+    # direct launch preserves this process's controller DISPLAY.
+    /usr/bin/env DISPLAY="$controller_display" \
+        "$wine_bin" "$uu_app_dir/GameViewer.exe" \
+        >>"$state_dir/client-bootstrap.log" 2>&1 &
 
     # Keep the layered Wine/Qt management window mapped. Minimizing it while
     # its top-level windows are still being replaced can raise BadWindow,
@@ -1574,6 +1604,8 @@ console_focus_lease_active() {
     local command=""
     local lease_pid=""
 
+    # An independent controller must never suspend the host relay.
+    [[ ! -r "$controller_display_file" ]] || return 1
     [[ -r "$console_focus_file" ]] || return 1
     read -r lease_pid <"$console_focus_file" || lease_pid=""
     if [[ "$lease_pid" =~ ^[1-9][0-9]*$ ]] &&
@@ -1594,6 +1626,7 @@ console_focus_lease_active() {
 supervise_server() {
     local last_pid="$1"
     local candidate
+    local candidate_display
     local candidate_relay_window_id
     local current_default_interface
     local active_window_id
@@ -1620,6 +1653,12 @@ supervise_server() {
             missing_checks=0
         fi
         if [[ -n "$candidate" && "$candidate" != "$last_pid" ]]; then
+            candidate_display="$(process_environment_value DISPLAY "$candidate")"
+            if [[ -n "$candidate_display" && "$candidate_display" != "$DISPLAY" &&
+                  "$candidate_display" != "$DISPLAY.0" ]]; then
+                log 'UU server restarted on the controller display; restarting the bridge to restore host capture.'
+                return 1
+            fi
             sleep 0.25
             if "$wine_bin" "$input_injector_exe" \
                 "$input_bridge_windows_path" \
@@ -1655,8 +1694,18 @@ supervise_server() {
             active_window_id="$(
                 /usr/bin/xdotool getactivewindow 2>/dev/null || true
             )"
-            if ! console_focus_lease_active &&
-               [[ "$active_window_id" != "$relay_window_id" ]]; then
+            if [[ "$active_keyboard_route" == x11 && "$desktop_relay" == vnc ]]; then
+                # Keep the capture surface mapped/raised without stealing
+                # the controller's keyboard focus. Incoming input goes to X11 on
+                # the physical desktop, not through this VNC viewer.
+                /usr/bin/xdotool windowmap "$relay_window_id" \
+                    windowraise "$relay_window_id" >/dev/null 2>&1 || true
+            elif ! console_focus_lease_active && {
+               [[ "$active_window_id" != "$relay_window_id" ]] ||
+               ! /usr/bin/xprop -id "$relay_window_id" WM_STATE 2>/dev/null |
+                    /usr/bin/grep -q 'window state: Normal'; }; then
+                # A minimized relay can retain a stale active-window ID.
+                # Restore its mapping as well as its focus.
                 /usr/bin/xdotool windowmap "$relay_window_id" \
                     windowactivate "$relay_window_id" \
                     >/dev/null 2>&1 || true
@@ -1747,6 +1796,7 @@ critical_pids=(
     "$server_supervisor_pid"
 )
 for optional_pid in \
+    "$controller_openbox_pid" \
     "$grd_pid" \
     "$freerdp_pid" \
     "$desktop_x11vnc_pid" \

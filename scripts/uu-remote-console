@@ -10,6 +10,7 @@ runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}/uu-remote-console"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/uu-remote-console"
 bridge_xauthority_file="$bridge_runtime_dir/Xauthority"
 bridge_display_file="$bridge_runtime_dir/private-display"
+controller_display_file="$bridge_runtime_dir/controller-display"
 bridge_focus_file="$bridge_runtime_dir/console-focus"
 window_lock_file="$runtime_dir/window.lock"
 script_path="$(readlink -f "$0")"
@@ -73,7 +74,7 @@ display_ready() {
     local display="$1"
     local xauthority="$2"
 
-    [[ "$display" =~ ^:(0|[1-9][0-9]{0,2})$ ]] &&
+    [[ "$display" =~ ^:(0|[1-9][0-9]{0,2})(\.1)?$ ]] &&
         [[ -r "$xauthority" ]] &&
         /usr/bin/env DISPLAY="$display" XAUTHORITY="$xauthority" \
             /usr/bin/xdpyinfo >/dev/null 2>&1
@@ -129,6 +130,17 @@ listener_present() {
         /usr/bin/grep -q .
 }
 
+discover_controller() {
+    local candidate=""
+    discover_bridge || return 1
+    if [[ -r "$controller_display_file" ]]; then
+        read -r candidate <"$controller_display_file" || return 1
+        [[ "$candidate" == "$bridge_display.1" ]] || return 1
+        display_ready "$candidate" "$bridge_xauthority_file" || return 1
+        bridge_display="$candidate"
+    fi
+}
+
 wait_for_bridge() {
     for _ in {1..160}; do
         if discover_bridge; then
@@ -150,7 +162,7 @@ find_client_window() {
     local window
     local width=0
 
-    discover_bridge || return 1
+    discover_controller || return 1
     active="$(
         /usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" \
@@ -203,7 +215,7 @@ find_scene_window() {
     local window
     local width=0
 
-    discover_bridge || return 1
+    discover_controller || return 1
     while read -r window; do
         state="$(
             /usr/bin/env DISPLAY="$bridge_display" \
@@ -290,7 +302,17 @@ focus_client() {
     local client_window=""
     local relay_window=""
 
-    discover_bridge || return 1
+    discover_controller || return 1
+    if [[ -r "$controller_display_file" ]]; then
+        # Never hide or acquire the host's focus lease for an independent
+        # controller display.
+        client_window="$(find_client_window | /usr/bin/tail -n 1)"
+        [[ -n "$client_window" ]] || return 1
+        /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool windowmap "$client_window" \
+            windowactivate --sync "$client_window" >/dev/null 2>&1 || true
+        return 0
+    fi
     /usr/bin/install -d -m 0700 "$bridge_runtime_dir"
     printf '%s\n' "$$" >"$bridge_focus_file"
     chmod 0600 "$bridge_focus_file"
@@ -318,6 +340,11 @@ release_client() {
     local relay_window=""
 
     rm -f "$bridge_focus_file"
+    # An independent controller cannot cover the host relay; leave its Qt
+    # backing store mapped so reopening never revives an empty surface.
+    if [[ -r "$controller_display_file" ]]; then
+        return 0
+    fi
     discover_bridge || return 0
     client_window="$(find_client_window | /usr/bin/tail -n 1)"
     if [[ -n "$client_window" ]]; then
@@ -383,7 +410,9 @@ monitor_private_scene() {
     local screen_width=0
     local source_fullscreen=false
     local viewer_window=""
+    local undecorated_viewer=""
     local source_state=""
+    local source_ewmh_state=""
     local previous_candidate=""
     local iconic_candidate=""
     local iconic_checks=0
@@ -410,6 +439,13 @@ monitor_private_scene() {
     while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
         candidate="$(find_scene_window | /usr/bin/tail -n 1)"
         viewer_window="$(find_local_viewer_window || true)"
+        if [[ -n "$viewer_window" && "$viewer_window" != "$undecorated_viewer" ]]; then
+            # UU already paints its own window controls. A second title bar
+            # acts on a different X window and creates conflicting controls.
+            if remove_local_viewer_decorations "$viewer_window"; then
+                undecorated_viewer="$viewer_window"
+            fi
+        fi
         # Closing UU hides it to Wine's tray. Do not leave a live black
         # viewer behind. Allow a short gap for launcher/session replacement.
         if [[ -z "$candidate" ]]; then
@@ -495,11 +531,12 @@ monitor_private_scene() {
             fi
         fi
         source_fullscreen=false
-        if [[ -n "$candidate" ]] &&
-           /usr/bin/env DISPLAY="$bridge_display" \
-               XAUTHORITY="$bridge_xauthority" \
-               /usr/bin/xprop -id "$candidate" _NET_WM_STATE 2>/dev/null |
-               /usr/bin/grep -q '_NET_WM_STATE_FULLSCREEN'; then
+        source_ewmh_state="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" _NET_WM_STATE 2>/dev/null || true)"
+        if [[ "$source_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ||
+              ( "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
+                "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ) ]]; then
             source_fullscreen=true
         fi
         # Some UU/Wine windows drop the EWMH fullscreen flag while retaining
@@ -640,8 +677,36 @@ set_local_viewer_fullscreen() {
     local window=""
 
     window="$(find_local_viewer_window)" || return 1
+    # Respect the desktop's work area: a fullscreen viewport puts UU's
+    # only controls underneath always-on-top panels such as Quickshell.
     /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
-        -b "$action,fullscreen" >/dev/null 2>&1
+        -b remove,fullscreen >/dev/null 2>&1 || true
+    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
+        -b "$action,maximized_vert,maximized_horz" >/dev/null 2>&1
+}
+
+remove_local_viewer_decorations() {
+    # XFWM requires the property TYPE to be _MOTIF_WM_HINTS too. xprop's
+    # `32c` writes CARDINAL: Openbox accepts it, XFWM silently ignores it.
+    /usr/bin/python3 - "$1" <<'PY'
+import ctypes as c
+import sys
+x = c.CDLL('libX11.so.6')
+x.XOpenDisplay.argtypes = [c.c_char_p]
+x.XOpenDisplay.restype = c.c_void_p
+x.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]
+x.XInternAtom.restype = c.c_ulong
+x.XChangeProperty.argtypes = [c.c_void_p, c.c_ulong, c.c_ulong, c.c_ulong,
+                             c.c_int, c.c_int, c.c_void_p, c.c_int]
+x.XCloseDisplay.argtypes = [c.c_void_p]
+d = x.XOpenDisplay(None)
+if not d:
+    sys.exit(1)
+atom = x.XInternAtom(d, b'_MOTIF_WM_HINTS', 0)
+hints = (c.c_ulong * 5)(2, 0, 0, 0, 0)
+x.XChangeProperty(d, int(sys.argv[1]), atom, atom, 32, 0, hints, 5)
+x.XCloseDisplay(d)
+PY
 }
 
 set_local_viewer_geometry() {
@@ -708,7 +773,7 @@ restore_private_client_window() {
     # an empty canvas with no private taskbar from which to recover it.
     # Discover in this shell, not only inside the command substitution below,
     # so the DISPLAY and XAUTHORITY values remain available to xdotool.
-    discover_bridge || return 1
+    discover_controller || return 1
     client_window="$(find_scene_window | /usr/bin/tail -n 1)"
     if [[ -z "$client_window" ]]; then
         wake_private_client || return 1
@@ -904,7 +969,8 @@ open_window() {
         return 1
     fi
     for command in /usr/bin/flock /usr/bin/ss /usr/bin/vncviewer \
-        /usr/bin/x11vnc /usr/bin/xdotool /usr/bin/xdpyinfo /usr/bin/wmctrl; do
+        /usr/bin/x11vnc /usr/bin/xdotool /usr/bin/xdpyinfo /usr/bin/wmctrl \
+        /usr/bin/xprop /usr/bin/python3; do
         if [[ ! -x "$command" ]]; then
             notify_error "UU window dependency is missing: $command"
             return 1
@@ -929,6 +995,7 @@ open_window() {
         notify_error 'The Ubuntu desktop bridge could not start.'
         return 1
     fi
+    discover_controller || return 1
 
     if [[ -z "$(find_scene_window)" ]]; then
         wake_private_client || true
@@ -997,6 +1064,8 @@ open_window() {
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
         -clip "$initial_clip" \
+        -xwarppointer \
+        -nocursorpos \
         -env "X11VNC_REMOTE=$window_remote_channel" \
         -rfbport "$window_port" \
         -listen 127.0.0.1 \
@@ -1034,6 +1103,7 @@ open_window() {
     set +e
     /usr/bin/vncviewer \
         -geometry "${client_width}x${client_height}" \
+        -PointerEventInterval=0 \
         -Shared=1 \
         -RemoteResize=0 \
         -ReconnectOnError=0 \
@@ -1065,6 +1135,7 @@ serve_console() {
         printf 'The UU private X display did not become ready.\n' >&2
         return 1
     fi
+    discover_controller || return 1
     if listener_present "$vnc_port" || listener_present "$web_port"; then
         printf 'UU console port %s or %s is already in use.\n' \
             "$vnc_port" "$web_port" >&2
@@ -1082,6 +1153,8 @@ serve_console() {
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
         -rfbport "$vnc_port" \
+        -xwarppointer \
+        -nocursorpos \
         -localhost \
         -no6 \
         -nopw \

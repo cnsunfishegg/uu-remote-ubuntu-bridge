@@ -1570,6 +1570,27 @@ bootstrap_account() {
 # also asks the server to exit.
 bootstrap_account
 
+console_focus_lease_active() {
+    local command=""
+    local lease_pid=""
+
+    [[ -r "$console_focus_file" ]] || return 1
+    read -r lease_pid <"$console_focus_file" || lease_pid=""
+    if [[ "$lease_pid" =~ ^[1-9][0-9]*$ ]] &&
+       kill -0 "$lease_pid" >/dev/null 2>&1 &&
+       [[ -r "/proc/$lease_pid/cmdline" ]]; then
+        command="$(
+            /usr/bin/tr '\0' ' ' <"/proc/$lease_pid/cmdline" \
+                2>/dev/null || true
+        )"
+        if [[ "$command" == *'uu-remote-console window'* ]]; then
+            return 0
+        fi
+    fi
+    rm -f "$console_focus_file"
+    return 1
+}
+
 supervise_server() {
     local last_pid="$1"
     local candidate
@@ -1634,10 +1655,10 @@ supervise_server() {
             active_window_id="$(
                 /usr/bin/xdotool getactivewindow 2>/dev/null || true
             )"
-            if [[ ! -e "$console_focus_file" && \
-                  -n "$active_window_id" && \
-                  "$active_window_id" != "$relay_window_id" ]]; then
-                /usr/bin/xdotool windowactivate "$relay_window_id" \
+            if ! console_focus_lease_active &&
+               [[ "$active_window_id" != "$relay_window_id" ]]; then
+                /usr/bin/xdotool windowmap "$relay_window_id" \
+                    windowactivate "$relay_window_id" \
                     >/dev/null 2>&1 || true
             fi
         fi

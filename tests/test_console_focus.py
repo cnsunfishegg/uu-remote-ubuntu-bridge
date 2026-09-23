@@ -21,10 +21,12 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertNotIn('-viewonly', window)
         self.assertNotIn('-nomouse', window)
         self.assertNotIn('-nokeyboard', window)
-        self.assertIn('monitor_private_scene &', window)
         self.assertIn('-geometry "${client_width}x${client_height}"', window)
-        self.assertIn('windowmove "$client_window" 0 0', window)
-        self.assertNotIn('X11VNC_REMOTE=', window)
+        self.assertIn('-clip "$initial_clip"', window)
+        self.assertIn('monitor_private_scene "$initial_clip" &', window)
+        self.assertIn('X11VNC_REMOTE=$window_remote_channel', window)
+        self.assertIn('-R "clip:$clip"', SOURCE)
+        self.assertIn('-gone "$script_path release-client"', window)
         self.assertNotIn('-R "sid:', window)
         self.assertIn('stop_window_child "$window_vnc_pid"', SOURCE)
         self.assertIn('/usr/bin/flock -w 4 9', window)
@@ -42,6 +44,7 @@ case "$*" in
   *getwindowname*200*) printf 'Remote session\\n';;
   *getwindowname*300*) printf 'GameViewer\\n';;
   *getwindowname*202*) printf 'UU Remote - TigerVNC\\n';;
+  *getwindowname*203*) printf 'xbt:0 - TigerVNC\\n';;
   *getwindowgeometry*100*) printf '  Geometry: 920x680\\n';;
   *getwindowgeometry*200*) printf '  Geometry: 1536x904\\n';;
   *getwindowgeometry*300*) printf '  Geometry: 96x136\\n';;
@@ -50,7 +53,7 @@ case "$*" in
     printf '101\\n';;
   *search*TigerVNC*|*search*realvnc-vncviewer*)
     [[ "$FOCUS_TEST_MODE" == vnc ]] || exit 1
-    printf '202\\n';;
+    printf '202\\n203\\n';;
   *) printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG";;
 esac
 ''')
@@ -89,7 +92,8 @@ printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG"
     def test_restores_rdp(self):
         result, calls, lease = self.run_helpers("rdp", "focus_client; release_client")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("windowactivate 101", calls)
+        self.assertIn("windowminimize 101", calls)
+        self.assertIn("windowmap 101 windowactivate 101", calls)
         self.assertFalse(lease)
 
     def test_restores_native_vnc_and_filters_toast(self):
@@ -98,7 +102,8 @@ printf '%s\\n' "$*" >> "$FOCUS_TEST_LOG"
         self.assertIn("windowmap 200 windowactivate --sync 200", calls)
         self.assertNotIn("windowmap 100", calls)
         self.assertNotIn("windowmap 300", calls)
-        self.assertIn("windowactivate 202", calls)
+        self.assertIn("windowminimize 203", calls)
+        self.assertIn("windowmap 203 windowactivate 203", calls)
         self.assertFalse(lease)
 
     def test_missing_relay_still_releases_lease(self):

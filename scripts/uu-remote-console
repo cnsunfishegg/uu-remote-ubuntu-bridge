@@ -41,6 +41,7 @@ vnc_pid=""
 websockify_pid=""
 window_vnc_pid=""
 window_monitor_pid=""
+window_remote_channel=""
 relay_focus_pid=""
 
 notify_error() {
@@ -192,7 +193,53 @@ find_client_window() {
     [[ -z "$best" ]] || printf '%s\n' "$best"
 }
 
+find_scene_window() {
+    local best=""
+    local best_score=-1
+    local geometry=""
+    local height=0
+    local score=0
+    local state=""
+    local window
+    local width=0
+
+    discover_bridge || return 1
+    while read -r window; do
+        state="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xprop -id "$window" WM_STATE 2>/dev/null || true
+        )"
+        [[ "$state" == *'WM_STATE(WM_STATE)'* ]] || continue
+        geometry="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool getwindowgeometry "$window" 2>/dev/null || true
+        )"
+        [[ "$geometry" =~ Geometry:[[:space:]]*([0-9]+)x([0-9]+) ]] || continue
+        width="${BASH_REMATCH[1]}"
+        height="${BASH_REMATCH[2]}"
+        ((width >= 400 && height >= 300)) || continue
+        score=$((width * height))
+        # Prefer a visible UU surface over a larger stale/iconified session.
+        [[ "$state" == *'window state: Normal'* ]] &&
+            score=$((score + 100000000))
+        if ((score > best_score)); then
+            best="$window"
+            best_score="$score"
+        fi
+    done < <(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool search --class 'gameviewer.exe' 2>/dev/null ||
+            true
+    )
+    [[ -z "$best" ]] || printf '%s\n' "$best"
+}
+
 find_relay_window() {
+    local candidate=""
+    local name=""
     local relay=""
     discover_bridge || return 1
     relay="$(
@@ -202,22 +249,38 @@ find_relay_window() {
             /usr/bin/tail -n 1 || true
     )"
     if [[ -z "$relay" ]]; then
-        relay="$(
-            /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/xdotool search --onlyvisible --all \
-                    --class 'TigerVNC Viewer' \
-                    --name ' - TigerVNC$' 2>/dev/null | \
-                /usr/bin/tail -n 1 || true
-        )"
+        while read -r candidate; do
+            name="$(
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/xdotool getwindowname "$candidate" \
+                        2>/dev/null || true
+            )"
+            [[ "$name" == *' - TigerVNC' ]] && relay="$candidate"
+        done < <(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool search --class 'TigerVNC Viewer' \
+                    2>/dev/null || true
+        )
     fi
     if [[ -z "$relay" ]]; then
-        relay="$(
-            /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/xdotool search --onlyvisible --all \
-                    --class 'realvnc-vncviewer' \
-                    --name '^127\.0\.0\.1:.* - RealVNC Viewer$' 2>/dev/null | \
-                /usr/bin/tail -n 1 || true
-        )"
+        while read -r candidate; do
+            name="$(
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/xdotool getwindowname "$candidate" \
+                        2>/dev/null || true
+            )"
+            if [[ "$name" =~ ^127\.0\.0\.1:.*\ -\ RealVNC\ Viewer$ ]]; then
+                relay="$candidate"
+            fi
+        done < <(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool search --class 'realvnc-vncviewer' \
+                    2>/dev/null || true
+        )
     fi
     [[ -n "$relay" ]] || return 1
     printf '%s\n' "$relay"
@@ -225,11 +288,22 @@ find_relay_window() {
 
 focus_client() {
     local client_window=""
+    local relay_window=""
 
     discover_bridge || return 1
     /usr/bin/install -d -m 0700 "$bridge_runtime_dir"
     printf '%s\n' "$$" >"$bridge_focus_file"
     chmod 0600 "$bridge_focus_file"
+    # Never leave the physical-desktop relay behind the local controller.
+    # The physical desktop contains this TigerVNC window, so exposing that
+    # relay during a UU window transition creates an infinite mirror loop.
+    relay_window="$(find_relay_window || true)"
+    if [[ -n "$relay_window" ]]; then
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool windowminimize "$relay_window" \
+                >/dev/null 2>&1 || true
+    fi
     client_window="$(find_client_window | /usr/bin/tail -n 1)"
     if [[ -n "$client_window" ]]; then
         /usr/bin/env DISPLAY="$bridge_display" \
@@ -256,7 +330,8 @@ release_client() {
     if [[ -n "$relay_window" ]]; then
         /usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" \
-            /usr/bin/xdotool windowactivate "$relay_window" \
+            /usr/bin/xdotool windowmap "$relay_window" \
+                windowactivate "$relay_window" \
                 >/dev/null 2>&1 || true
     fi
 }
@@ -298,13 +373,20 @@ stop_window_child() {
 }
 
 monitor_private_scene() {
+    local selected_clip="$1"
     local candidate=""
+    local clip=""
     local geometry=""
+    local height=0
     local screen_height=0
     local screen_size=""
     local screen_width=0
     local source_fullscreen=false
+    local viewer_size=""
     local viewer_fullscreen_owned=false
+    local width=0
+    local x=0
+    local y=0
 
     screen_size="$(
         /usr/bin/env DISPLAY="$bridge_display" \
@@ -319,15 +401,39 @@ monitor_private_scene() {
         screen_height="${BASH_REMATCH[2]}"
     fi
     while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
-        candidate="$(find_client_window | /usr/bin/tail -n 1)"
+        candidate="$(find_scene_window | /usr/bin/tail -n 1)"
         geometry=""
         if [[ -n "$candidate" ]]; then
             geometry="$(
                 /usr/bin/env DISPLAY="$bridge_display" \
                     XAUTHORITY="$bridge_xauthority" \
                     /usr/bin/xdotool getwindowgeometry --shell "$candidate" \
-                        2>/dev/null || true
+                2>/dev/null || true
             )"
+        fi
+        x="$(/usr/bin/sed -n 's/^X=\(-\{0,1\}[0-9]\+\)$/\1/p' \
+            <<<"$geometry" | /usr/bin/head -n 1)"
+        y="$(/usr/bin/sed -n 's/^Y=\(-\{0,1\}[0-9]\+\)$/\1/p' \
+            <<<"$geometry" | /usr/bin/head -n 1)"
+        width="$(/usr/bin/sed -n 's/^WIDTH=\([0-9]\+\)$/\1/p' \
+            <<<"$geometry" | /usr/bin/head -n 1)"
+        height="$(/usr/bin/sed -n 's/^HEIGHT=\([0-9]\+\)$/\1/p' \
+            <<<"$geometry" | /usr/bin/head -n 1)"
+        clip=""
+        if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ &&
+              "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ &&
+              "$width" -ge 400 && "$height" -ge 300 ]]; then
+            clip="${width}x${height}+${x}+${y}"
+        fi
+        if [[ -n "$clip" && "$clip" != "$selected_clip" ]]; then
+            if /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/x11vnc \
+                    -env "X11VNC_REMOTE=$window_remote_channel" \
+                    -R "clip:$clip" >/dev/null 2>&1; then
+                selected_clip="$clip"
+                viewer_size=""
+            fi
         fi
         source_fullscreen=false
         if [[ -n "$candidate" ]] &&
@@ -344,20 +450,6 @@ monitor_private_scene() {
               "$geometry" == *$'\n'"HEIGHT=$screen_height"$'\n'* ]]; then
             source_fullscreen=true
         fi
-        # The VNC server deliberately exposes the stable root scene. Keep a
-        # normal-sized UU window at the root origin so TigerVNC can show the
-        # complete launcher in its small viewport without expanding to the
-        # whole monitor (which also confuses some Quickshell layouts).
-        if [[ "$source_fullscreen" == false && -n "$candidate" &&
-              -n "$geometry" ]]; then
-            if [[ "$geometry" != *$'\nX=0\n'* ||
-                  "$geometry" != *$'\nY=0\n'* ]]; then
-                /usr/bin/env DISPLAY="$bridge_display" \
-                    XAUTHORITY="$bridge_xauthority" \
-                    /usr/bin/xdotool windowmove "$candidate" 0 0 \
-                        >/dev/null 2>&1 || true
-            fi
-        fi
         if [[ "$source_fullscreen" == true &&
               "$viewer_fullscreen_owned" == false ]]; then
             if set_local_viewer_fullscreen add; then
@@ -367,6 +459,13 @@ monitor_private_scene() {
                 "$viewer_fullscreen_owned" == true ]]; then
             if set_local_viewer_fullscreen remove; then
                 viewer_fullscreen_owned=false
+            fi
+        fi
+        if [[ "$source_fullscreen" == false &&
+              "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ &&
+              "${width}x${height}" != "$viewer_size" ]]; then
+            if set_local_viewer_geometry "$width" "$height"; then
+                viewer_size="${width}x${height}"
             fi
         fi
         sleep 0.5
@@ -479,6 +578,35 @@ set_local_viewer_fullscreen() {
     window="$(find_local_viewer_window)" || return 1
     /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
         -b "$action,fullscreen" >/dev/null 2>&1
+}
+
+set_local_viewer_geometry() {
+    local height="$2"
+    local screen_height=0
+    local screen_width=0
+    local width="$1"
+    local window=""
+    local x=0
+    local y=0
+
+    window="$(find_local_viewer_window)" || return 1
+    if ! read -r screen_width screen_height < <(
+        /usr/bin/xdotool getdisplaygeometry 2>/dev/null || true
+    ); then
+        screen_width=0
+        screen_height=0
+    fi
+    if [[ "$screen_width" =~ ^[0-9]+$ &&
+          "$screen_height" =~ ^[0-9]+$ ]]; then
+        x=$(((screen_width - width) / 2))
+        y=$(((screen_height - height) / 2))
+        ((x >= 0)) || x=0
+        ((y >= 0)) || y=0
+    fi
+    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
+        -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
+    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
+        -e "0,$x,$y,$width,$height" >/dev/null 2>&1
 }
 
 activate_existing_window() {
@@ -642,7 +770,10 @@ open_window() {
     local client_geometry=""
     local client_height=680
     local client_width=920
+    local client_x=0
+    local client_y=0
     local command
+    local initial_clip=""
     local ready=false
     local viewer_status=0
     local window_port=""
@@ -679,7 +810,7 @@ open_window() {
     fi
 
     for _ in {1..120}; do
-        client_window="$(find_client_window | /usr/bin/tail -n 1)"
+        client_window="$(find_scene_window | /usr/bin/tail -n 1)"
         [[ -n "$client_window" ]] && break
         sleep 0.1
     done
@@ -703,6 +834,14 @@ open_window() {
             /usr/bin/sed -n 's/^HEIGHT=\([0-9]\+\)$/\1/p' \
                 <<<"$client_geometry" | /usr/bin/head -n 1
         )"
+        client_x="$(
+            /usr/bin/sed -n 's/^X=\([0-9]\+\)$/\1/p' \
+                <<<"$client_geometry" | /usr/bin/head -n 1
+        )"
+        client_y="$(
+            /usr/bin/sed -n 's/^Y=\([0-9]\+\)$/\1/p' \
+                <<<"$client_geometry" | /usr/bin/head -n 1
+        )"
     fi
     if [[ ! "$client_width" =~ ^[0-9]+$ ||
           ! "$client_height" =~ ^[0-9]+$ ||
@@ -710,14 +849,14 @@ open_window() {
         client_width=920
         client_height=680
     fi
-    /usr/bin/env DISPLAY="$bridge_display" \
-        XAUTHORITY="$bridge_xauthority" \
-        /usr/bin/xdotool windowmove "$client_window" 0 0 \
-            >/dev/null 2>&1 || true
+    [[ "$client_x" =~ ^[0-9]+$ ]] || client_x=0
+    [[ "$client_y" =~ ^[0-9]+$ ]] || client_y=0
+    initial_clip="${client_width}x${client_height}+${client_x}+${client_y}"
     window_port="$(choose_window_port)" || {
         notify_error 'No free loopback port is available for the UU window.'
         return 1
     }
+    window_remote_channel="UURB_WINDOW_${UID}_${window_port}_$$"
     printf '%s\n' "$window_port" >"$runtime_dir/window.port"
     chmod 0600 "$runtime_dir/window.port"
     trap cleanup_window EXIT
@@ -725,15 +864,16 @@ open_window() {
     trap 'exit 143' TERM HUP
     focus_client
 
-    # Mirror the complete private UU desktop, not one disposable child
-    # window. UU destroys and replaces its management window when a remote
-    # session starts; binding x11vnc to that child used to terminate the local
-    # viewer at exactly that transition. The stable root scene keeps the
-    # launcher, session, popups, and return-to-launcher flow in one viewer.
+    # Clip the stable root scene to the active UU surface. Unlike -id/-sid,
+    # this does not bind the server lifetime to a disposable child window.
+    # The monitor can change the clip and framebuffer size in place as UU
+    # transitions between its launcher and a remote session.
     /usr/bin/env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 \
         /usr/bin/x11vnc \
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
+        -clip "$initial_clip" \
+        -env "X11VNC_REMOTE=$window_remote_channel" \
         -rfbport "$window_port" \
         -listen 127.0.0.1 \
         -localhost \
@@ -745,6 +885,7 @@ open_window() {
         -nowf \
         -noscr \
         -desktop 'UU Remote' \
+        -gone "$script_path release-client" \
         -quiet \
         >>"$state_dir/window-x11vnc.log" 2>&1 &
     window_vnc_pid=$!
@@ -763,7 +904,7 @@ open_window() {
         return 1
     fi
 
-    monitor_private_scene &
+    monitor_private_scene "$initial_clip" &
     window_monitor_pid=$!
 
     set +e

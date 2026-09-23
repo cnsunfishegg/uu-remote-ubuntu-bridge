@@ -475,9 +475,11 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn('"$wine_bin" start "$1"', command)
         self.assertNotIn('-sid "$client_window"', console)
         self.assertNotIn('-R "sid:$candidate"', console)
-        self.assertIn('monitor_private_scene &', console)
+        self.assertIn('monitor_private_scene "$initial_clip" &', console)
         self.assertIn('-geometry "${client_width}x${client_height}"', console)
-        self.assertIn('windowmove "$client_window" 0 0', console)
+        self.assertIn('-clip "$initial_clip"', console)
+        self.assertIn('-R "clip:$clip"', console)
+        self.assertIn('set_local_viewer_geometry "$width" "$height"', console)
         self.assertIn("/usr/bin/flock -n 9", console)
         self.assertIn("activate_existing_window", console)
         self.assertIn("cleanup_window", console)
@@ -486,7 +488,8 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertNotIn("open-client", launcher)
         self.assertIn("bootstrap_account", launcher)
         self.assertIn('console_focus_file="$runtime_dir/console-focus"', launcher)
-        self.assertIn('[[ ! -e "$console_focus_file"', launcher)
+        self.assertIn("console_focus_lease_active", launcher)
+        self.assertIn("rm -f \"$console_focus_file\"", launcher)
         self.assertIn("scripts/uu-remote-console", digest)
         self.assertIn("systemd/uu-remote-console.service", digest)
         self.assertIn("desktop/uu-remote.desktop.in", digest)
@@ -584,12 +587,14 @@ class RuntimeScriptTests(unittest.TestCase):
 
         self.assertIn("relay_window_id=", launcher)
         self.assertIn("/usr/bin/xdotool getactivewindow", launcher)
+        self.assertIn("console_focus_lease_active", launcher)
+        self.assertIn("/proc/$lease_pid/cmdline", launcher)
         self.assertIn(
             'active_window_id" != "$relay_window_id"',
             launcher,
         )
         self.assertIn(
-            '/usr/bin/xdotool windowactivate "$relay_window_id"',
+            '/usr/bin/xdotool windowmap "$relay_window_id"',
             launcher,
         )
         bootstrap = launcher[

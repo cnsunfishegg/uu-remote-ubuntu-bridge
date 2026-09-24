@@ -78,14 +78,17 @@ Screens still share X input, so canvas separation alone is insufficient:
 - The local viewer disables pointer-position feedback and uses XWarpPointer
   to target the correct screen, including when the other screen has focus.
 
-The local viewer has no second titlebar. `_MOTIF_WM_HINTS` uses its own atom
-as its property type; CARDINAL was accepted by Openbox but ignored by XFWM.
-Live XFWM frame extents were checked as `0, 0, 0, 0`. Minimize maps to the
-taskbar. The borderless viewport can be moved with the desktop's Alt-drag
-gesture; private titlebar motion is not synchronized to the outer window.
-The inner maximize uses the physical desktop's maximized work area, not true
-fullscreen: Quickshell's always-on-top panel otherwise covers UU's only
-restore/close buttons. An isolated dock/strut fixture checks this explicitly.
+An earlier attempt removed the local viewer's titlebar with `_MOTIF_WM_HINTS`.
+Although that removed duplicate buttons, private-window motion and physical
+viewer motion then fed back through different pointer coordinate systems.
+The viewer now retains its native titlebar, which alone owns physical dragging.
+At this stage, the private window could move within Xvfb while a root crop
+followed it; out-of-bounds source coordinates were clamped, and the crop used
+the source client's actual root coordinates rather than `xdotool`'s extra WM
+decoration offset. Either set of maximize/restore buttons is mirrored to the
+other and uses the physical desktop's work area, not true fullscreen, so an
+always-on-top Quickshell panel cannot hide the Linux restore button. Native
+and inner minimize both have a taskbar restore path.
 
 Follow-up validation:
 
@@ -104,3 +107,57 @@ Follow-up validation:
 The incoming path still needs a real Mac-to-Linux reconnect acceptance test.
 Mac Caps Lock/input-method switching was neither modified nor certified.
 No release was published from this check.
+
+## Follow-up: native window ownership and crop alignment
+
+The isolated Openbox/TigerVNC/Xvfb lifecycle test now also checks native
+titlebar dragging is exactly 1:1, private source movement does not move the
+viewer, an escaped source is recovered before first paint, and the viewer's
+actual pixels match the source client's top-left region. It exercises both
+directions of maximize/restore, native and inner minimize/restore, local versus
+remote keyboard focus, scaled pointer input, session disposal, and inner close.
+This is local integration evidence, not a two-computer Mac acceptance result.
+
+## Follow-up: eliminate the black intermediate frame
+
+The root crop remained one or more frames behind a moving private UU window.
+A 24-move isolated frame comparison exposed the virtual desktop's black
+background in 17 intermediate frames, despite correct final alignment. The
+local viewer now captures the selected X window directly (`x11vnc -id`), so
+window movement does not require a new root crop. An active, overlapping UU
+popup temporarily selects `-sid` to include that separate top-level window,
+forces a complete framebuffer refresh after the mode switch, then returns to
+`-id` when the popup closes. The explicit refresh is required for Wine's
+translucent auxiliary windows: without it, x11vnc can retain their initial
+opaque black placeholder even though the private X root is correctly painted.
+The popup is raised after the mode switch and pointer input is checked through
+the viewer. The same 24-move
+test passed with zero black intermediate frames using direct capture. This
+was also checked against the actual running UU launcher through a view-only
+isolated viewer: twenty bounded moves produced zero dark-frame drops, and the
+launcher was restored to its original position. A real connected Mac session
+still needs acceptance before a release.
+
+For a full-screen remote scene, the sidecar now starts with an exact root clip
+instead of changing from `-id` after UU creates its auxiliary windows. The
+remote window remains fixed, so there is no drag/crop race; the stable clip
+includes the toolbar, control centre, and network overlay in the first
+framebuffer and preserves the tested pointer offset.
+
+## Follow-up: explicit controller state and input-boundary trace
+
+The window monitor now publishes one atomic, mode-0600 controller state with a
+monotonic generation for source selection, capture mode/window, geometry,
+scale, viewer, maximize state, and lifecycle. Cleanup removes the state file.
+The isolated lifecycle test verifies that the candidate and actual capture
+agree before interaction, then repeats the prior black-frame, popup, scaling,
+focus, minimize, and cleanup checks.
+
+`uu-remote trace-controller` independently observes the physical and private
+XInput boundaries, counts pointer movement, and attaches the coordinator
+generation to button/key events. It does not store key identities, text,
+titles, clipboard contents, or pixels. Parser, privacy, boundary diagnosis,
+focus-leak diagnosis, and a real isolated XInput collector all passed. A live
+preflight found generation 2 in `ready` state with the expected 1920x1080
+source and 0.936111 scale. No physical user event occurred during that bounded
+capture, so it is not evidence that a click reached the connected Mac.

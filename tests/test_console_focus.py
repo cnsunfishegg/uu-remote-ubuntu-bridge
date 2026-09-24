@@ -14,23 +14,62 @@ class ConsoleFocusTests(unittest.TestCase):
     def test_local_window_keeps_bidirectional_input_on_loopback(self):
         window = SOURCE.split("open_window() {", 1)[1].split("serve_console() {", 1)[0]
         self.assertIn('-display "$bridge_display"', window)
-        self.assertNotIn('-sid "$client_window"', window)
-        self.assertNotIn('        -id "$client_window"', window)
+        self.assertIn('-id "$client_window"', window)
         self.assertIn('-listen 127.0.0.1', window)
         self.assertIn('-localhost', window)
         self.assertNotIn('-viewonly', window)
         self.assertNotIn('-nomouse', window)
         self.assertNotIn('-nokeyboard', window)
         self.assertIn('-geometry "${client_width}x${client_height}"', window)
-        self.assertIn('-clip "$initial_clip"', window)
+        self.assertIn('-ViewOnly=0', window)
+        self.assertIn('-FullScreen="$controller_fullscreen_value"', window)
+        self.assertIn('-FullscreenSystemKeys=1', window)
+        self.assertIn('-MenuKey=F8', window)
+        self.assertIn('-AlwaysCursor=1', window)
+        self.assertIn('-CursorType=System', window)
+        self.assertIn('-PointerEventInterval=8', window)
+        self.assertIn('-PreferredEncoding=Raw', window)
+        self.assertIn('-input KMBC', window)
+        self.assertIn('-always_inject', window)
+        self.assertIn('-wait 10', window)
+        self.assertIn('-defer 0', window)
+        self.assertIn('-nowait_bog', window)
+        self.assertNotIn('move_local_viewer_by "$viewer_window"', SOURCE)
+        self.assertIn('private_window_geometry "$candidate"', SOURCE)
+        self.assertIn('/usr/bin/xwininfo -id "$1" -stats', SOURCE)
+        self.assertNotIn('set_private_window_maximized "$candidate"', SOURCE)
+        self.assertNotIn('-clip "$initial_clip"', window)
         self.assertIn('-xwarppointer', window)
-        self.assertIn('monitor_private_scene "$initial_clip" &', window)
+        self.assertIn('monitor_private_scene "$client_window" \\', window)
+        self.assertIn('"$presentation_width" "$presentation_height" \\', window)
+        self.assertIn('"$presentation_mode" "$initial_capture_signature" &', window)
+        self.assertIn('initial_capture_signature="root-clip:$client_window:', window)
+        self.assertIn('-clip "${client_width}x${client_height}+${client_x}+${client_y}"', window)
         self.assertIn('X11VNC_REMOTE=$window_remote_channel', window)
-        self.assertIn('-R "clip:$clip"', SOURCE)
+        self.assertIn('desired_capture="id:$candidate"', SOURCE)
+        self.assertIn('capture_mode=sid', SOURCE)
+        self.assertIn('capture_command="script:sid:$candidate;refresh"', SOURCE)
+        self.assertIn('capture_mode=root-clip', SOURCE)
+        self.assertIn('capture_command="script:clip:${width}x${height}+${x}+${y};refresh"', SOURCE)
+        self.assertIn('find_private_overlay "$candidate"', SOURCE)
+        self.assertIn('-R "$capture_command"', SOURCE)
         self.assertIn('-gone "$script_path release-client"', window)
-        self.assertNotIn('-R "sid:', window)
         self.assertIn('stop_window_child "$window_vnc_pid"', SOURCE)
+        self.assertIn('publish_controller_state "$state_generation" ready', SOURCE)
+        self.assertIn(
+            'rm -f "$runtime_dir/window.port" "$controller_state_file"', SOURCE
+        )
         self.assertIn('/usr/bin/flock -w 4 9', window)
+        self.assertIn('controller_fullscreen="${UURB_CONTROLLER_FULLSCREEN:-auto}"', SOURCE)
+        self.assertIn('controller_remote_session_active', window)
+        self.assertIn('request_presentation_mode "$desired_presentation"', SOURCE)
+        self.assertIn('set_local_viewer_borderless "$viewer_window"', SOURCE)
+        self.assertIn('exec "$script_path" window', window)
+        self.assertIn('restart uu-remote-bridge.service', window)
+        self.assertLess(
+            window.index('cleanup_window\n        exec 9>&-'),
+            window.index('restart uu-remote-bridge.service'),
+        )
 
     def run_helpers(self, mode, commands):
         with tempfile.TemporaryDirectory(prefix="uu-focus-test-") as temp:
@@ -147,9 +186,44 @@ discover_controller
         self.assertEqual(result.stdout.strip(), "200")
 
     def test_selects_active_session_window_over_larger_background_window(self):
-        result, _, _ = self.run_helpers("active_small", "find_client_window")
+        for helper in ("find_client_window", "find_scene_window"):
+            with self.subTest(helper=helper):
+                result, _, _ = self.run_helpers("active_small", helper)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "100")
+
+    def test_detects_only_a_visible_remote_scene_as_active_session(self):
+        result, _, _ = self.run_helpers(
+            "none", "controller_remote_session_active"
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "100")
+        result, _, _ = self.run_helpers(
+            "active_small", "controller_remote_session_active"
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_detects_launcher_as_the_active_scene_after_session_exit(self):
+        result, _, _ = self.run_helpers(
+            "active_small", "controller_management_scene_active"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result, _, _ = self.run_helpers(
+            "none", "controller_management_scene_active"
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_auto_presentation_separates_launcher_and_remote_canvas(self):
+        cases = (
+            ("presentation_mode_for_scene 100 100 1920 1080 true", "windowed"),
+            ("presentation_mode_for_scene 200 100 1920 1080 true", "fullscreen"),
+            ("presentation_mode_for_scene 200 100 1536 904 false", "fullscreen"),
+            ("presentation_mode_for_scene 300 100 700 500 false", "windowed"),
+        )
+        for command, expected in cases:
+            with self.subTest(command=command):
+                result, _, _ = self.run_helpers("none", command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
 
     def test_stuck_viewer_child_does_not_hold_window_lock_forever(self):
         started = time.monotonic()
@@ -165,14 +239,38 @@ if kill -0 "$stuck" 2>/dev/null; then exit 1; fi
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(time.monotonic() - started, 4)
 
-    def test_fullscreen_state_targets_only_the_local_uu_viewer(self):
-        result, calls, _ = self.run_helpers(
-            "vnc", "set_local_viewer_fullscreen add"
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("-ir 0xca -b remove,fullscreen", calls)
-        self.assertIn("-ir 0xca -b add,maximized_vert,maximized_horz", calls)
-        self.assertNotIn("-b add,fullscreen", calls)
+    def test_private_client_does_not_inherit_outer_window_lock(self):
+        with tempfile.TemporaryDirectory(prefix="uu-lock-inheritance-") as temp:
+            root = Path(temp)
+            helper = root / ".local/bin/uu-remote"
+            helper.parent.mkdir(parents=True)
+            helper.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ -e /proc/self/fd/9 ]]; then\n"
+                "  printf inherited >\"$HOME/fd-result\"\n"
+                "  exit 9\n"
+                "fi\n"
+                "printf closed >\"$HOME/fd-result\"\n"
+            )
+            helper.chmod(0o700)
+            script = SOURCE.split('case "${1:-open}" in', 1)[0]
+            script += '''
+mkdir -p "$state_dir"
+exec 9>"$HOME/window.lock"
+flock 9
+wake_private_client
+'''
+            env = dict(
+                os.environ,
+                HOME=temp,
+                XDG_RUNTIME_DIR=temp,
+                XDG_STATE_HOME=temp,
+            )
+            result = subprocess.run(
+                ["bash", "-c", script], env=env, capture_output=True, text=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "fd-result").read_text(), "closed")
 
     def test_reopening_iconified_viewer_restores_both_window_layers(self):
         result, calls, _ = self.run_helpers("vnc", "activate_existing_window")

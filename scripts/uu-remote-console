@@ -13,6 +13,8 @@ bridge_display_file="$bridge_runtime_dir/private-display"
 controller_display_file="$bridge_runtime_dir/controller-display"
 bridge_focus_file="$bridge_runtime_dir/console-focus"
 window_lock_file="$runtime_dir/window.lock"
+controller_state_file="$runtime_dir/controller.state"
+presentation_request_file="$runtime_dir/presentation.request"
 script_path="$(readlink -f "$0")"
 systemctl_user=(
     /usr/bin/env
@@ -35,6 +37,8 @@ web_port="${UURB_CONSOLE_WEB_PORT:-${saved_web_port:-6080}}"
 relay_vnc_port="${UURB_RELAY_VNC_PORT:-5922}"
 relay_vnc_auth_file="${UURB_RELAY_VNC_AUTH_FILE:-$config_dir/relay-vnc.pass}"
 novnc_root="${UURB_NOVNC_ROOT:-/usr/share/novnc}"
+controller_fullscreen="${UURB_CONTROLLER_FULLSCREEN:-auto}"
+controller_fullscreen_value=0
 console_url="http://127.0.0.1:$web_port/vnc.html?autoconnect=1&resize=scale&reconnect=1"
 bridge_display=""
 bridge_xauthority=""
@@ -69,6 +73,13 @@ fi
 vnc_port=$((10#$vnc_port))
 web_port=$((10#$web_port))
 relay_vnc_port=$((10#$relay_vnc_port))
+case "$controller_fullscreen" in
+    auto|on|off) ;;
+    *)
+        printf 'UURB_CONTROLLER_FULLSCREEN must be auto, on, or off.\n' >&2
+        exit 2
+        ;;
+esac
 
 display_ready() {
     local display="$1"
@@ -206,6 +217,7 @@ find_client_window() {
 }
 
 find_scene_window() {
+    local active=""
     local best=""
     local best_score=-1
     local geometry=""
@@ -215,7 +227,12 @@ find_scene_window() {
     local window
     local width=0
 
-    discover_controller || return 1
+    [[ "${1:-}" == --known-display ]] || discover_controller || return 1
+    active="$(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool getactivewindow 2>/dev/null || true
+    )"
     while read -r window; do
         state="$(
             /usr/bin/env DISPLAY="$bridge_display" \
@@ -236,6 +253,11 @@ find_scene_window() {
         # Prefer a visible UU surface over a larger stale/iconified session.
         [[ "$state" == *'window state: Normal'* ]] &&
             score=$((score + 100000000))
+        # The launcher remains mapped behind an active remote session.  If UU
+        # deliberately activates it again, treat that as a scene change so
+        # the host/device list can return inside the same outer shell.
+        [[ "$window" == "$active" ]] &&
+            score=$((score + 1000000000))
         if ((score > best_score)); then
             best="$window"
             best_score="$score"
@@ -247,6 +269,111 @@ find_scene_window() {
             true
     )
     [[ -z "$best" ]] || printf '%s\n' "$best"
+}
+
+find_management_window() {
+    local geometry=""
+    local height=0
+    local name=""
+    local state=""
+    local window=""
+    local width=0
+
+    [[ "${1:-}" == --known-display ]] || discover_controller || return 1
+    while read -r window; do
+        name="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool getwindowname "$window" 2>/dev/null || true
+        )"
+        case "$name" in
+            '网易UU远程'|'UU Remote'|'NetEase UU Remote') ;;
+            *) continue ;;
+        esac
+        state="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xprop -id "$window" WM_STATE 2>/dev/null || true
+        )"
+        [[ "$state" == *'WM_STATE(WM_STATE)'* ]] || continue
+        geometry="$(
+            /usr/bin/env DISPLAY="$bridge_display" \
+                XAUTHORITY="$bridge_xauthority" \
+                /usr/bin/xdotool getwindowgeometry "$window" 2>/dev/null || true
+        )"
+        [[ "$geometry" =~ Geometry:[[:space:]]*([0-9]+)x([0-9]+) ]] || continue
+        width="${BASH_REMATCH[1]}"
+        height="${BASH_REMATCH[2]}"
+        ((width >= 400 && height >= 300)) || continue
+        printf '%s\n' "$window"
+        return 0
+    done < <(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool search --class 'gameviewer.exe' 2>/dev/null ||
+            true
+    )
+    return 1
+}
+
+controller_remote_session_active() {
+    local management=""
+    local scene=""
+    local state=""
+
+    discover_controller || return 1
+    management="$(find_management_window --known-display || true)"
+    scene="$(find_scene_window --known-display | /usr/bin/tail -n 1)"
+    [[ -n "$management" && -n "$scene" && "$scene" != "$management" ]] ||
+        return 1
+    state="$(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xprop -id "$scene" WM_STATE 2>/dev/null || true
+    )"
+    [[ "$state" == *'window state: Normal'* ]]
+}
+
+controller_management_scene_active() {
+    local management=""
+    local scene=""
+
+    discover_controller || return 1
+    management="$(find_management_window --known-display || true)"
+    scene="$(find_scene_window --known-display | /usr/bin/tail -n 1)"
+    [[ -n "$management" && "$scene" == "$management" ]]
+}
+
+presentation_mode_for_scene() {
+    local candidate="$1"
+    local management="$2"
+    local width="$3"
+    local height="$4"
+    local source_fullscreen="$5"
+
+    case "$controller_fullscreen" in
+        on)
+            printf 'fullscreen\n'
+            return 0
+            ;;
+        off)
+            printf 'windowed\n'
+            return 0
+            ;;
+    esac
+    # The launcher/device list remains a normal application window even if
+    # UU retained an old maximize flag. A real remote surface gets its own
+    # freshly-created native full-screen viewer so no launcher scale leaks
+    # into the peer desktop.
+    if [[ -n "$management" && "$candidate" == "$management" ]]; then
+        printf 'windowed\n'
+    elif [[ "$source_fullscreen" == true ]] ||
+         { [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] &&
+           ((width >= 1200 && height >= 700)); }; then
+        printf 'fullscreen\n'
+    else
+        printf 'windowed\n'
+    fi
 }
 
 find_relay_window() {
@@ -381,7 +508,8 @@ cleanup_window() {
     stop_window_child "$window_monitor_pid"
     stop_window_child "$window_vnc_pid"
     release_client || true
-    rm -f "$runtime_dir/window.port"
+    rm -f "$runtime_dir/window.port" "$controller_state_file" \
+        "$presentation_request_file"
 }
 
 stop_window_child() {
@@ -399,10 +527,149 @@ stop_window_child() {
     wait "$pid" 2>/dev/null || true
 }
 
+publish_controller_state() {
+    local generation="$1" lifecycle="$2" candidate="$3"
+    local capture_mode="$4" capture_window="$5" overlay="$6"
+    local x="$7" y="$8" width="$9" height="${10}" scale="${11}"
+    local viewer="${12}" source_maximized="${13}" viewer_maximized="${14}"
+    local temporary=""
+
+    /usr/bin/install -d -m 0700 "$runtime_dir"
+    temporary="$(/usr/bin/mktemp "$runtime_dir/.controller.state.XXXXXX")"
+    {
+        printf 'schema=1\n'
+        printf 'generation=%s\n' "$generation"
+        printf 'lifecycle=%s\n' "$lifecycle"
+        printf 'candidate_window=%s\n' "${candidate:-0}"
+        printf 'capture_mode=%s\n' "${capture_mode:-none}"
+        printf 'capture_window=%s\n' "${capture_window:-0}"
+        printf 'overlay_window=%s\n' "${overlay:-0}"
+        printf 'source_x=%s\n' "${x:-0}"
+        printf 'source_y=%s\n' "${y:-0}"
+        printf 'source_width=%s\n' "${width:-0}"
+        printf 'source_height=%s\n' "${height:-0}"
+        printf 'scale=%s\n' "${scale:-0}"
+        printf 'viewer_window=%s\n' "${viewer:-0}"
+        printf 'source_maximized=%s\n' "$source_maximized"
+        printf 'viewer_maximized=%s\n' "$viewer_maximized"
+        printf 'presentation_mode=%s\n' "${presentation_mode:-unknown}"
+    } >"$temporary"
+    chmod 0600 "$temporary"
+    mv -f "$temporary" "$controller_state_file"
+}
+
+private_window_geometry() {
+    # xdotool getwindowgeometry adds Openbox's decoration offset a second
+    # time. x11vnc -clip needs the actual root coordinates of the client.
+    /usr/bin/env LC_ALL=C DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
+        /usr/bin/xwininfo -id "$1" -stats 2>/dev/null | /usr/bin/awk '
+            /Absolute upper-left X:/ { x = $NF }
+            /Absolute upper-left Y:/ { y = $NF }
+            /^  Width:/ { w = $NF }
+            /^  Height:/ { h = $NF }
+            END {
+                if (x != "" && y != "" && w != "" && h != "")
+                    printf "X=%s\nY=%s\nWIDTH=%s\nHEIGHT=%s\n", x, y, w, h
+            }'
+}
+
+find_private_overlay() {
+    local scene="$1" scene_x="$2" scene_y="$3"
+    local scene_width="$4" scene_height="$5"
+    local active="" active_class="" candidate=""
+    local best="" best_score=-1 candidate_score=0 is_overlay=false
+    local overlay_ewmh="" overlay_geometry="" overlay_state=""
+    local overlay_transient="" transient_target=0
+    local overlay_x="" overlay_y="" overlay_width="" overlay_height=""
+
+    [[ "$scene_x" =~ ^-?[0-9]+$ && "$scene_y" =~ ^-?[0-9]+$ &&
+       "$scene_width" =~ ^[0-9]+$ && "$scene_height" =~ ^[0-9]+$ ]] || return 1
+    active="$(/usr/bin/env DISPLAY="$bridge_display" \
+        XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+        getactivewindow 2>/dev/null || true)"
+    while read -r candidate; do
+        [[ "$candidate" =~ ^[0-9]+$ && "$candidate" != "$scene" ]] ||
+            continue
+        active_class="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" WM_CLASS 2>/dev/null || true)"
+        [[ "${active_class,,}" == *'"gameviewer.exe"'* ]] || continue
+        overlay_state="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" WM_STATE 2>/dev/null || true)"
+        [[ "$overlay_state" == *'window state: Normal'* ]] || continue
+        overlay_geometry="$(private_window_geometry "$candidate" || true)"
+        overlay_x="$(/usr/bin/sed -n 's/^X=//p' <<<"$overlay_geometry")"
+        overlay_y="$(/usr/bin/sed -n 's/^Y=//p' <<<"$overlay_geometry")"
+        overlay_width="$(/usr/bin/sed -n 's/^WIDTH=//p' <<<"$overlay_geometry")"
+        overlay_height="$(/usr/bin/sed -n 's/^HEIGHT=//p' <<<"$overlay_geometry")"
+        [[ "$overlay_x" =~ ^-?[0-9]+$ && "$overlay_y" =~ ^-?[0-9]+$ &&
+           "$overlay_width" =~ ^[0-9]+$ && "$overlay_height" =~ ^[0-9]+$ ]] ||
+            continue
+        ((overlay_x < scene_x + scene_width &&
+          overlay_x + overlay_width > scene_x &&
+          overlay_y < scene_y + scene_height &&
+          overlay_y + overlay_height > scene_y)) || continue
+
+        overlay_ewmh="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" _NET_WM_STATE 2>/dev/null || true)"
+        overlay_transient="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" WM_TRANSIENT_FOR 2>/dev/null || true)"
+        is_overlay=false
+        candidate_score=$((overlay_width * overlay_height))
+        if [[ "$candidate" == "$active" ]]; then
+            is_overlay=true
+            candidate_score=$((candidate_score + 100000000))
+        fi
+        if [[ "$overlay_ewmh" == *'_NET_WM_STATE_ABOVE'* ]]; then
+            is_overlay=true
+            candidate_score=$((candidate_score + 50000000))
+        fi
+        if [[ "$overlay_transient" =~ window[[:space:]]id[[:space:]]#[[:space:]](0x[0-9a-fA-F]+|[0-9]+) ]]; then
+            transient_target=$((BASH_REMATCH[1]))
+            if ((transient_target == scene)); then
+                is_overlay=true
+                candidate_score=$((candidate_score + 25000000))
+            fi
+        fi
+        [[ "$is_overlay" == true ]] || continue
+        if ((candidate_score > best_score)); then
+            best="$candidate"
+            best_score="$candidate_score"
+        fi
+    done < <(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" \
+            /usr/bin/xdotool search --class 'gameviewer.exe' 2>/dev/null || true
+    )
+    [[ -z "$best" ]] || printf '%s\n' "$best"
+}
+
+request_presentation_mode() {
+    local requested="$1"
+    local temporary=""
+
+    [[ "$requested" == windowed || "$requested" == fullscreen ]] || return 1
+    temporary="$(/usr/bin/mktemp "$runtime_dir/.presentation.request.XXXXXX")"
+    printf '%s\n' "$requested" >"$temporary"
+    chmod 0600 "$temporary"
+    mv -f "$temporary" "$presentation_request_file"
+    # Disconnect the local transport only after the request is durable. The
+    # parent re-execs this controller against the new UU scene immediately.
+    kill "$window_vnc_pid" >/dev/null 2>&1 || true
+}
+
 monitor_private_scene() {
-    local selected_clip="$1"
+    local initial_capture="${5:-id:$1}"
+    local selected_capture="$initial_capture"
+    local presentation_width="${2:-0}"
+    local presentation_height="${3:-0}"
+    local presentation_mode="${4:-windowed}"
+    local presentation_fullscreen=false
     local candidate=""
-    local clip=""
+    local desired_presentation=""
     local geometry=""
     local height=0
     local screen_height=0
@@ -410,20 +677,40 @@ monitor_private_scene() {
     local screen_width=0
     local source_fullscreen=false
     local viewer_window=""
-    local undecorated_viewer=""
+    local viewer_styled=false
+    local initial_viewer_focused=false
     local source_state=""
     local source_ewmh_state=""
+    local management_window=""
     local previous_candidate=""
+    local viewer_ewmh_state=""
+    local viewer_maximized=false
+    local overlay_window=""
+    local capture_mode=""
+    local capture_command=""
+    local capture_updated=false
+    local desired_capture=""
     local iconic_candidate=""
     local iconic_checks=0
     local missing_checks=0
     local selected_scale="1.000000"
     local scale=""
-    local viewer_fullscreen_owned=false
     local width=0
     local x=0
     local y=0
+    local desired_x=0
+    local desired_y=0
+    local frame_extents=""
+    local frame_left=0
+    local frame_top=0
+    local active_capture_mode="${initial_capture%%:*}"
+    local active_capture_window="$1"
+    local state_generation=0
+    local state_signature=""
+    local next_state_signature=""
 
+    [[ "$presentation_mode" == fullscreen ]] && presentation_fullscreen=true
+    management_window="$(find_management_window --known-display || true)"
     screen_size="$(
         /usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" \
@@ -436,23 +723,52 @@ monitor_private_scene() {
         screen_width="${BASH_REMATCH[1]}"
         screen_height="${BASH_REMATCH[2]}"
     fi
+    publish_controller_state "$state_generation" starting "$1" \
+        "$active_capture_mode" "$1" 0 \
+        0 0 0 0 1.000000 0 false false
     while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
-        candidate="$(find_scene_window | /usr/bin/tail -n 1)"
-        viewer_window="$(find_local_viewer_window || true)"
-        if [[ -n "$viewer_window" && "$viewer_window" != "$undecorated_viewer" ]]; then
-            # UU already paints its own window controls. A second title bar
-            # acts on a different X window and creates conflicting controls.
-            if remove_local_viewer_decorations "$viewer_window"; then
-                undecorated_viewer="$viewer_window"
+        candidate="$(find_scene_window --known-display | /usr/bin/tail -n 1)"
+        if [[ "$presentation_fullscreen" == false && -z "$viewer_window" ]]; then
+            viewer_window="$(find_local_viewer_window || true)"
+        fi
+        if [[ "$presentation_fullscreen" == false && -n "$viewer_window" &&
+              "$controller_fullscreen" == auto &&
+              "$viewer_styled" == false ]]; then
+            set_local_viewer_borderless "$viewer_window" || true
+            viewer_styled=true
+        fi
+        if [[ "$presentation_fullscreen" == false && -n "$viewer_window" &&
+              "$initial_viewer_focused" == false ]]; then
+            # A launcher started from another application may map without
+            # receiving keyboard focus. Focus once, never steal it back
+            # after the user deliberately switches to a local app.
+            if /usr/bin/xdotool windowactivate "$viewer_window" \
+                >/dev/null 2>&1; then
+                initial_viewer_focused=true
             fi
         fi
         # Closing UU hides it to Wine's tray. Do not leave a live black
         # viewer behind. Allow a short gap for launcher/session replacement.
         if [[ -z "$candidate" ]]; then
             missing_checks=$((missing_checks + 1))
-            if ((missing_checks >= 4)) && [[ -n "$viewer_window" ]]; then
-                /usr/bin/wmctrl -ic "$(printf '0x%x' "$viewer_window")" \
-                    >/dev/null 2>&1 || true
+            next_state_signature="source-missing|$viewer_window"
+            if [[ "$next_state_signature" != "$state_signature" ]]; then
+                state_generation=$((state_generation + 1))
+                publish_controller_state "$state_generation" source-missing \
+                    0 none 0 0 0 0 0 0 "$selected_scale" \
+                    "$viewer_window" false false
+                state_signature="$next_state_signature"
+            fi
+            if ((missing_checks >= 4)); then
+                if [[ "$presentation_fullscreen" == true ]]; then
+                    # A native TigerVNC full-screen keyboard grab deliberately
+                    # blocks other physical-X clients. End the VNC side to
+                    # close its shell without querying that grabbed display.
+                    kill "$window_vnc_pid" >/dev/null 2>&1 || true
+                elif [[ -n "$viewer_window" ]]; then
+                    /usr/bin/wmctrl -ic "$(printf '0x%x' "$viewer_window")" \
+                        >/dev/null 2>&1 || true
+                fi
                 return 0
             fi
             sleep 0.25
@@ -471,14 +787,26 @@ monitor_private_scene() {
                 iconic_checks=0
             fi
             iconic_checks=$((iconic_checks + 1))
-            if ((iconic_checks < 3)); then
+            next_state_signature="source-iconic|$candidate|$viewer_window"
+            if [[ "$next_state_signature" != "$state_signature" ]]; then
+                state_generation=$((state_generation + 1))
+                publish_controller_state "$state_generation" source-iconic \
+                    "$candidate" "$active_capture_mode" \
+                    "$active_capture_window" 0 0 0 0 0 "$selected_scale" \
+                    "$viewer_window" false false
+                state_signature="$next_state_signature"
+            fi
+            if ((iconic_checks < 6)); then
                 sleep 0.25
                 continue
             fi
             # The inner minimize button operates on the private display.
             # Minimize the real desktop window, then keep its source painted
             # so either the taskbar or the app shortcut can restore it.
-            if [[ -n "$viewer_window" ]]; then
+            if [[ "$presentation_fullscreen" == true ]]; then
+                kill "$window_vnc_pid" >/dev/null 2>&1 || true
+                return 0
+            elif [[ -n "$viewer_window" ]]; then
                 # Returning from a destroyed remote session selects the
                 # previously minimized launcher. That is a window switch,
                 # not a user request to minimize the outer app.
@@ -496,15 +824,9 @@ monitor_private_scene() {
         fi
         iconic_candidate=""
         iconic_checks=0
-        previous_candidate="$candidate"
         geometry=""
         if [[ -n "$candidate" ]]; then
-            geometry="$(
-                /usr/bin/env DISPLAY="$bridge_display" \
-                    XAUTHORITY="$bridge_xauthority" \
-                    /usr/bin/xdotool getwindowgeometry --shell "$candidate" \
-                2>/dev/null || true
-            )"
+            geometry="$(private_window_geometry "$candidate" || true)"
         fi
         x="$(/usr/bin/sed -n 's/^X=\(-\{0,1\}[0-9]\+\)$/\1/p' \
             <<<"$geometry" | /usr/bin/head -n 1)"
@@ -514,26 +836,36 @@ monitor_private_scene() {
             <<<"$geometry" | /usr/bin/head -n 1)"
         height="$(/usr/bin/sed -n 's/^HEIGHT=\([0-9]\+\)$/\1/p' \
             <<<"$geometry" | /usr/bin/head -n 1)"
-        clip=""
-        if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ &&
-              "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ &&
-              "$width" -ge 400 && "$height" -ge 300 ]]; then
-            clip="${width}x${height}+${x}+${y}"
-        fi
-        if [[ -n "$clip" && "$clip" != "$selected_clip" ]]; then
-            if /usr/bin/env DISPLAY="$bridge_display" \
-                XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/x11vnc \
-                    -env "X11VNC_REMOTE=$window_remote_channel" \
-                    -R "clip:$clip" >/dev/null 2>&1; then
-                selected_clip="$clip"
-                selected_scale=""
-            fi
-        fi
-        source_fullscreen=false
         source_ewmh_state="$(/usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
             -id "$candidate" _NET_WM_STATE 2>/dev/null || true)"
+        # Keep the private window inside Xvfb's root. Even direct X-window
+        # capture can lose paint if a window moves partly off-screen.
+        if [[ "$x" =~ ^-?[0-9]+$ && "$y" =~ ^-?[0-9]+$ &&
+              "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] &&
+           ((screen_width >= width && screen_height >= height)); then
+            desired_x=$((x < 0 ? 0 : x > screen_width - width ? screen_width - width : x))
+            desired_y=$((y < 0 ? 0 : y > screen_height - height ? screen_height - height : y))
+            if ((desired_x != x || desired_y != y)); then
+                frame_extents="$(/usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+                    -id "$candidate" _NET_FRAME_EXTENTS 2>/dev/null || true)"
+                frame_left=0
+                frame_top=0
+                if [[ "$frame_extents" =~ =\ ([0-9]+),\ ([0-9]+),\ ([0-9]+),\ ([0-9]+) ]]; then
+                    frame_left="${BASH_REMATCH[1]}"
+                    frame_top="${BASH_REMATCH[3]}"
+                fi
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+                    windowmove "$candidate" "$((desired_x - frame_left))" \
+                    "$((desired_y - frame_top))" \
+                    >/dev/null 2>&1 || true
+                x="$desired_x"
+                y="$desired_y"
+            fi
+        fi
+        source_fullscreen=false
         if [[ "$source_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ||
               ( "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
                 "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ) ]]; then
@@ -546,21 +878,121 @@ monitor_private_scene() {
               "$geometry" == *$'\n'"HEIGHT=$screen_height"$'\n'* ]]; then
             source_fullscreen=true
         fi
-        if [[ "$source_fullscreen" == true &&
-              "$viewer_fullscreen_owned" == false ]]; then
-            if set_local_viewer_fullscreen add; then
-                viewer_fullscreen_owned=true
+        if [[ -z "$management_window" ]]; then
+            management_window="$(find_management_window --known-display || true)"
+        fi
+        desired_presentation="$(presentation_mode_for_scene \
+            "$candidate" "$management_window" "$width" "$height" \
+            "$source_fullscreen")"
+        if [[ "$desired_presentation" != "$presentation_mode" ]]; then
+            # A 920x680 launcher and a full-size remote framebuffer are two
+            # different presentation states. Recreate TigerVNC at the scene
+            # boundary; reusing its old canvas leaves stale scale/viewport
+            # state until the user manually toggles maximize twice.
+            request_presentation_mode "$desired_presentation"
+            return 0
+        fi
+
+        # A permanent root crop trails a draggable launcher and exposes the
+        # black Xvfb background between crop updates, so windowed management
+        # uses direct window capture. A full-screen remote scene is different:
+        # its source remains fixed, while UU's toolbar, control centre, and
+        # network statistics are separate translucent Wine windows. Capture
+        # the exact root rectangle for the entire remote session so all those
+        # surfaces are composed from the first frame. This avoids both -sid's
+        # opaque black placeholders and mid-session framebuffer resizes.
+        overlay_window="$(find_private_overlay "$candidate" "$x" "$y" \
+            "$width" "$height" || true)"
+        capture_mode=id
+        desired_capture="id:$candidate"
+        if [[ "$presentation_fullscreen" == true ]]; then
+            capture_mode=root-clip
+            desired_capture="root-clip:$candidate:${width}x${height}+${x}+${y}"
+        elif [[ -n "$overlay_window" ]]; then
+            capture_mode=sid
+            desired_capture="sid:$candidate"
+        fi
+        if [[ "$desired_capture" != "$selected_capture" ]]; then
+            capture_updated=false
+            if [[ "$capture_mode" == root-clip ]]; then
+                if [[ "$active_capture_mode" == root-clip ]]; then
+                    capture_command="script:clip:${width}x${height}+${x}+${y};refresh"
+                else
+                    capture_command="script:id:root;clip:${width}x${height}+${x}+${y};refresh"
+                fi
+                if /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/x11vnc \
+                        -env "X11VNC_REMOTE=$window_remote_channel" \
+                        -R "$capture_command" >/dev/null 2>&1; then
+                    capture_updated=true
+                fi
+            elif [[ "$capture_mode" == sid ]]; then
+                capture_command="script:sid:$candidate;refresh"
+                if /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/x11vnc \
+                        -env "X11VNC_REMOTE=$window_remote_channel" \
+                        -R "$capture_command" >/dev/null 2>&1; then
+                    capture_updated=true
+                fi
+            else
+                # A plain id command clears shifted-root mode reliably. The
+                # old x11vnc script parser can leave -sid selected when id and
+                # refresh are bundled in one script, so refresh separately.
+                capture_command="id:$candidate"
+                if /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/x11vnc \
+                        -env "X11VNC_REMOTE=$window_remote_channel" \
+                        -R "$capture_command" >/dev/null 2>&1 &&
+                   /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" \
+                    /usr/bin/x11vnc \
+                        -env "X11VNC_REMOTE=$window_remote_channel" \
+                        -R refresh >/dev/null 2>&1; then
+                    capture_updated=true
+                fi
             fi
-        elif [[ "$source_fullscreen" == false &&
-                "$viewer_fullscreen_owned" == true ]]; then
-            if set_local_viewer_fullscreen remove; then
-                viewer_fullscreen_owned=false
+            if [[ "$capture_updated" == true ]]; then
+                selected_capture="$desired_capture"
+                active_capture_mode="$capture_mode"
+                active_capture_window="$candidate"
+                if [[ -n "$overlay_window" ]]; then
+                    /usr/bin/env DISPLAY="$bridge_display" \
+                        XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+                        windowraise "$overlay_window" >/dev/null 2>&1 || true
+                fi
             fi
         fi
+        viewer_maximized=false
+        if [[ "$presentation_fullscreen" == true ]]; then
+            viewer_maximized=true
+        elif [[ -n "$viewer_window" ]]; then
+            viewer_ewmh_state="$(/usr/bin/xprop -id "$viewer_window" \
+                _NET_WM_STATE 2>/dev/null || true)"
+            if [[ "$viewer_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ||
+                  ( "$viewer_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
+                    "$viewer_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ) ]]; then
+                viewer_maximized=true
+            fi
+        fi
+        # TigerVNC is the presentation shell, not a second application
+        # window. It owns one real full-screen surface so Xfwm does not steal
+        # Alt+Tab and no duplicate Linux titlebar is visible. UU's inner
+        # controls remain the sole minimize/maximize/close controls.
+        previous_candidate="$candidate"
         # Fit the full source into the actual viewport, including when the
         # user resizes/maximizes the outer window. UU's launcher has a fixed
         # layout, so changing its X window dimensions cannot implement this.
-        scale="$(viewer_fit_scale "$width" "$height" || true)"
+        if [[ "$presentation_fullscreen" == true &&
+              "$presentation_width" =~ ^[1-9][0-9]*$ &&
+              "$presentation_height" =~ ^[1-9][0-9]*$ ]]; then
+            scale="$(fit_scale "$width" "$height" \
+                "$presentation_width" "$presentation_height" || true)"
+        else
+            scale="$(viewer_fit_scale "$width" "$height" "$viewer_window" || true)"
+        fi
         if [[ -n "$scale" && "$scale" != "$selected_scale" ]]; then
             if /usr/bin/env DISPLAY="$bridge_display" \
                 XAUTHORITY="$bridge_xauthority" /usr/bin/x11vnc \
@@ -569,7 +1001,19 @@ monitor_private_scene() {
                 selected_scale="$scale"
             fi
         fi
-        sleep 0.25
+        next_state_signature="ready|$candidate|$active_capture_mode|$active_capture_window|$overlay_window|$x|$y|$width|$height|$selected_scale|$viewer_window|$source_fullscreen|$viewer_maximized"
+        if [[ "$next_state_signature" != "$state_signature" ]]; then
+            state_generation=$((state_generation + 1))
+            publish_controller_state "$state_generation" ready "$candidate" \
+                "$active_capture_mode" "$active_capture_window" \
+                "$overlay_window" "$x" "$y" "$width" "$height" \
+                "$selected_scale" "$viewer_window" "$source_fullscreen" \
+                "$viewer_maximized"
+            state_signature="$next_state_signature"
+        fi
+        # Keep drag tracking responsive; the costlier focus/clip/scale
+        # commands above still run only when their state changes.
+        sleep 0.10
     done
 }
 
@@ -672,83 +1116,68 @@ find_local_viewer_window() {
     printf '%s\n' "$window"
 }
 
-set_local_viewer_fullscreen() {
-    local action="$1"
-    local window=""
+set_local_viewer_borderless() {
+    local window="$1"
 
-    window="$(find_local_viewer_window)" || return 1
-    # Respect the desktop's work area: a fullscreen viewport puts UU's
-    # only controls underneath always-on-top panels such as Quickshell.
-    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
-        -b remove,fullscreen >/dev/null 2>&1 || true
-    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
-        -b "$action,maximized_vert,maximized_horz" >/dev/null 2>&1
-}
-
-remove_local_viewer_decorations() {
-    # XFWM requires the property TYPE to be _MOTIF_WM_HINTS too. xprop's
-    # `32c` writes CARDINAL: Openbox accepts it, XFWM silently ignores it.
-    /usr/bin/python3 - "$1" <<'PY'
-import ctypes as c
+    [[ "$window" =~ ^[1-9][0-9]*$ ]] || return 1
+    # In automatic mode the windowed shell represents UU's launcher, not a
+    # second application. Let UU's own minimize/maximize/close row be the
+    # only visible chrome instead of stacking an Xfwm titlebar above it.
+    # xprop writes this uncommon property with type CARDINAL, which Xfwm
+    # ignores. Set its required self-named X atom type through Xlib instead.
+    /usr/bin/python3 - "$window" <<'PY'
+import ctypes
 import sys
-x = c.CDLL('libX11.so.6')
-x.XOpenDisplay.argtypes = [c.c_char_p]
-x.XOpenDisplay.restype = c.c_void_p
-x.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]
-x.XInternAtom.restype = c.c_ulong
-x.XChangeProperty.argtypes = [c.c_void_p, c.c_ulong, c.c_ulong, c.c_ulong,
-                             c.c_int, c.c_int, c.c_void_p, c.c_int]
-x.XCloseDisplay.argtypes = [c.c_void_p]
-d = x.XOpenDisplay(None)
-if not d:
-    sys.exit(1)
-atom = x.XInternAtom(d, b'_MOTIF_WM_HINTS', 0)
-hints = (c.c_ulong * 5)(2, 0, 0, 0, 0)
-x.XChangeProperty(d, int(sys.argv[1]), atom, atom, 32, 0, hints, 5)
-x.XCloseDisplay(d)
+
+x11 = ctypes.CDLL("libX11.so.6")
+x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+x11.XOpenDisplay.restype = ctypes.c_void_p
+x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+x11.XInternAtom.restype = ctypes.c_ulong
+x11.XChangeProperty.argtypes = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong,
+    ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_int,
+]
+x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+display = x11.XOpenDisplay(None)
+if not display:
+    raise SystemExit(2)
+atom = x11.XInternAtom(display, b"_MOTIF_WM_HINTS", 0)
+values = (ctypes.c_ulong * 5)(2, 0, 0, 0, 0)
+status = x11.XChangeProperty(
+    display, int(sys.argv[1]), atom, atom, 32, 0,
+    ctypes.cast(values, ctypes.POINTER(ctypes.c_ubyte)), 5,
+)
+x11.XSync(display, 0)
+x11.XCloseDisplay(display)
+raise SystemExit(0 if status == 1 else 3)
 PY
-}
-
-set_local_viewer_geometry() {
-    local height="$2"
-    local screen_height=0
-    local screen_width=0
-    local width="$1"
-    local window=""
-    local x=0
-    local y=0
-
-    window="$(find_local_viewer_window)" || return 1
-    if ! read -r screen_width screen_height < <(
-        /usr/bin/xdotool getdisplaygeometry 2>/dev/null || true
-    ); then
-        screen_width=0
-        screen_height=0
-    fi
-    if [[ "$screen_width" =~ ^[0-9]+$ &&
-          "$screen_height" =~ ^[0-9]+$ ]]; then
-        x=$(((screen_width - width) / 2))
-        y=$(((screen_height - height) / 2))
-        ((x >= 0)) || x=0
-        ((y >= 0)) || y=0
-    fi
-    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
-        -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
-    /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" \
-        -e "0,$x,$y,$width,$height" >/dev/null 2>&1
 }
 
 viewer_fit_scale() {
     local source_width="$1" source_height="$2"
-    local window="" geometry="" viewport_width="" viewport_height=""
+    local window="${3:-}" geometry="" viewport_width="" viewport_height=""
     [[ "$source_width" =~ ^[1-9][0-9]*$ &&
        "$source_height" =~ ^[1-9][0-9]*$ ]] || return 1
-    window="$(find_local_viewer_window)" || return 1
+    if [[ -z "$window" ]]; then
+        window="$(find_local_viewer_window)" || return 1
+    fi
     geometry="$(/usr/bin/xdotool getwindowgeometry --shell "$window" \
         2>/dev/null)" || return 1
     viewport_width="$(sed -n 's/^WIDTH=//p' <<<"$geometry")"
     viewport_height="$(sed -n 's/^HEIGHT=//p' <<<"$geometry")"
     [[ "$viewport_width" =~ ^[1-9][0-9]*$ &&
+       "$viewport_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    fit_scale "$source_width" "$source_height" \
+        "$viewport_width" "$viewport_height"
+}
+
+fit_scale() {
+    local source_width="$1" source_height="$2"
+    local viewport_width="$3" viewport_height="$4"
+    [[ "$source_width" =~ ^[1-9][0-9]*$ &&
+       "$source_height" =~ ^[1-9][0-9]*$ &&
+       "$viewport_width" =~ ^[1-9][0-9]*$ &&
        "$viewport_height" =~ ^[1-9][0-9]*$ ]] || return 1
     # x11vnc rounds scaled width up to a multiple of four. Reserve those
     # pixels to avoid a scrollbar which itself reduces the viewport.
@@ -761,7 +1190,11 @@ viewer_fit_scale() {
 }
 
 wake_private_client() {
-    /usr/bin/timeout 8 "$HOME/.local/bin/uu-remote" wake-private \
+    # fd 9 owns the outer-window flock.  UU's Wine processes are long-lived,
+    # so letting the activation helper inherit it makes a closed viewer leave
+    # the lock held by wineserver forever.  Close the descriptor at this
+    # process boundary; the coordinating shell remains the sole lock owner.
+    /usr/bin/timeout 8 "$HOME/.local/bin/uu-remote" wake-private 9>&- \
         >>"$state_dir/client-wake.log" 2>&1
 }
 
@@ -886,6 +1319,15 @@ serve_relay_vnc() {
         -noxdamage \
         -nowf \
         -noscr \
+        -repeat \
+        -nobell \
+        -modtweak \
+        -xkb \
+        -add_keysyms \
+        -wait 10 \
+        -defer 0 \
+        -nowait_bog \
+        -sb 0 \
         -desktop 'OptiPlex-7090 Physical Desktop' \
         -quiet \
         >>"$state_dir/relay-x11vnc.log" 2>&1 &
@@ -954,15 +1396,29 @@ serve_relay_vnc() {
 open_window() {
     local client_window=""
     local client_geometry=""
+    local client_ewmh_state=""
     local client_height=680
+    local client_source_fullscreen=false
     local client_width=920
     local client_x=0
     local client_y=0
     local command
-    local initial_clip=""
+    local frame_extents=""
+    local frame_left=0
+    local frame_top=0
+    local initial_capture_signature=""
+    local management_window=""
+    local presentation_mode=windowed
+    local private_screen=""
+    local private_screen_width=0
+    local private_screen_height=0
+    local presentation_width=0
+    local presentation_height=0
     local ready=false
+    local requested_presentation=""
     local viewer_status=0
     local window_port=""
+    local -a x11vnc_capture_args=()
 
     if [[ -z "${DISPLAY:-}" ]]; then
         notify_error 'Open UU Remote from a logged-in graphical desktop.'
@@ -970,7 +1426,7 @@ open_window() {
     fi
     for command in /usr/bin/flock /usr/bin/ss /usr/bin/vncviewer \
         /usr/bin/x11vnc /usr/bin/xdotool /usr/bin/xdpyinfo /usr/bin/wmctrl \
-        /usr/bin/xprop /usr/bin/python3; do
+        /usr/bin/xprop /usr/bin/xwininfo /usr/bin/python3; do
         if [[ ! -x "$command" ]]; then
             notify_error "UU window dependency is missing: $command"
             return 1
@@ -991,6 +1447,7 @@ open_window() {
             return 1
         fi
     fi
+    rm -f "$presentation_request_file"
     if ! ensure_bridge; then
         notify_error 'The Ubuntu desktop bridge could not start.'
         return 1
@@ -1009,12 +1466,7 @@ open_window() {
         notify_error 'The UU management window did not become ready.'
         return 1
     fi
-    client_geometry="$(
-        /usr/bin/env DISPLAY="$bridge_display" \
-            XAUTHORITY="$bridge_xauthority" \
-            /usr/bin/xdotool getwindowgeometry --shell "$client_window" \
-                2>/dev/null || true
-    )"
+    client_geometry="$(private_window_geometry "$client_window" || true)"
     if [[ "$client_geometry" == *$'\nWIDTH='* &&
           "$client_geometry" == *$'\nHEIGHT='* ]]; then
         client_width="$(
@@ -1026,11 +1478,11 @@ open_window() {
                 <<<"$client_geometry" | /usr/bin/head -n 1
         )"
         client_x="$(
-            /usr/bin/sed -n 's/^X=\([0-9]\+\)$/\1/p' \
+            /usr/bin/sed -n 's/^X=\(-\{0,1\}[0-9]\+\)$/\1/p' \
                 <<<"$client_geometry" | /usr/bin/head -n 1
         )"
         client_y="$(
-            /usr/bin/sed -n 's/^Y=\([0-9]\+\)$/\1/p' \
+            /usr/bin/sed -n 's/^Y=\(-\{0,1\}[0-9]\+\)$/\1/p' \
                 <<<"$client_geometry" | /usr/bin/head -n 1
         )"
     fi
@@ -1040,9 +1492,73 @@ open_window() {
         client_width=920
         client_height=680
     fi
-    [[ "$client_x" =~ ^[0-9]+$ ]] || client_x=0
-    [[ "$client_y" =~ ^[0-9]+$ ]] || client_y=0
-    initial_clip="${client_width}x${client_height}+${client_x}+${client_y}"
+    [[ "$client_x" =~ ^-?[0-9]+$ ]] || client_x=0
+    [[ "$client_y" =~ ^-?[0-9]+$ ]] || client_y=0
+    # Recover a launcher left off-screen by an earlier broken drag before
+    # the first VNC framebuffer is created; otherwise the viewer can open
+    # already collapsed to a black thumbnail.
+    private_screen="$(/usr/bin/env DISPLAY="$bridge_display" \
+        XAUTHORITY="$bridge_xauthority" /usr/bin/xdpyinfo 2>/dev/null | \
+        /usr/bin/sed -n \
+        's/^[[:space:]]*dimensions:[[:space:]]*\([0-9]\+x[0-9]\+\).*/\1/p' | \
+        /usr/bin/head -n 1)"
+    if [[ "$private_screen" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        private_screen_width="${BASH_REMATCH[1]}"
+        private_screen_height="${BASH_REMATCH[2]}"
+        if ((client_width <= private_screen_width &&
+             client_height <= private_screen_height)); then
+            local bounded_x=$((client_x < 0 ? 0 :
+                client_x > private_screen_width - client_width ?
+                private_screen_width - client_width : client_x))
+            local bounded_y=$((client_y < 0 ? 0 :
+                client_y > private_screen_height - client_height ?
+                private_screen_height - client_height : client_y))
+            if ((bounded_x != client_x || bounded_y != client_y)); then
+                frame_extents="$(/usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+                    -id "$client_window" _NET_FRAME_EXTENTS 2>/dev/null || true)"
+                if [[ "$frame_extents" =~ =\ ([0-9]+),\ ([0-9]+),\ ([0-9]+),\ ([0-9]+) ]]; then
+                    frame_left="${BASH_REMATCH[1]}"
+                    frame_top="${BASH_REMATCH[3]}"
+                fi
+                if /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+                    windowmove "$client_window" \
+                    "$((bounded_x - frame_left))" \
+                    "$((bounded_y - frame_top))" \
+                    >/dev/null 2>&1; then
+                    client_x="$bounded_x"
+                    client_y="$bounded_y"
+                fi
+            fi
+        fi
+    fi
+    client_ewmh_state="$(/usr/bin/env DISPLAY="$bridge_display" \
+        XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+        -id "$client_window" _NET_WM_STATE 2>/dev/null || true)"
+    if [[ "$client_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ||
+          ( "$client_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
+            "$client_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ) ]] ||
+       ((private_screen_width > 0 && private_screen_height > 0 &&
+         client_width == private_screen_width &&
+         client_height == private_screen_height)); then
+        client_source_fullscreen=true
+    fi
+    management_window="$(find_management_window --known-display || true)"
+    presentation_mode="$(presentation_mode_for_scene \
+        "$client_window" "$management_window" "$client_width" \
+        "$client_height" "$client_source_fullscreen")"
+    if [[ "$presentation_mode" == fullscreen ]]; then
+        controller_fullscreen_value=1
+        initial_capture_signature="root-clip:$client_window:${client_width}x${client_height}+${client_x}+${client_y}"
+        x11vnc_capture_args=(
+            -clip "${client_width}x${client_height}+${client_x}+${client_y}"
+        )
+    else
+        controller_fullscreen_value=0
+        initial_capture_signature="id:$client_window"
+        x11vnc_capture_args=(-id "$client_window")
+    fi
     window_port="$(choose_window_port)" || {
         notify_error 'No free loopback port is available for the UU window.'
         return 1
@@ -1055,15 +1571,27 @@ open_window() {
     trap 'exit 143' TERM HUP
     focus_client
 
-    # Clip the stable root scene to the active UU surface. Unlike -id/-sid,
-    # this does not bind the server lifetime to a disposable child window.
-    # The monitor can change the clip and framebuffer size in place as UU
-    # transitions between its launcher and a remote session.
+    # Query the physical viewport before TigerVNC performs its intentional
+    # full-screen keyboard grab. The monitor can then stay entirely off the
+    # grabbed physical X connection while UU is being controlled.
+    if read -r presentation_width presentation_height < <(
+        /usr/bin/xdotool getdisplaygeometry 2>/dev/null || true
+    ); then
+        [[ "$presentation_width" =~ ^[1-9][0-9]*$ ]] || presentation_width=0
+        [[ "$presentation_height" =~ ^[1-9][0-9]*$ ]] || presentation_height=0
+    fi
+
+    # A draggable management window uses direct X-window capture. A stable
+    # full-screen remote session starts with an exact root clip so UU's
+    # separate translucent toolbar/control windows are composited from the
+    # first framebuffer instead of arriving as opaque black rectangles.
     /usr/bin/env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 \
         /usr/bin/x11vnc \
         -display "$bridge_display" \
         -auth "$bridge_xauthority" \
-        -clip "$initial_clip" \
+        "${x11vnc_capture_args[@]}" \
+        -input KMBC \
+        -always_inject \
         -xwarppointer \
         -nocursorpos \
         -env "X11VNC_REMOTE=$window_remote_channel" \
@@ -1077,6 +1605,15 @@ open_window() {
         -noxdamage \
         -nowf \
         -noscr \
+        -repeat \
+        -nobell \
+        -modtweak \
+        -xkb \
+        -add_keysyms \
+        -wait 10 \
+        -defer 0 \
+        -nowait_bog \
+        -sb 0 \
         -desktop 'UU Remote' \
         -gone "$script_path release-client" \
         -quiet \
@@ -1097,13 +1634,25 @@ open_window() {
         return 1
     fi
 
-    monitor_private_scene "$initial_clip" &
+    monitor_private_scene "$client_window" \
+        "$presentation_width" "$presentation_height" \
+        "$presentation_mode" "$initial_capture_signature" &
     window_monitor_pid=$!
 
     set +e
     /usr/bin/vncviewer \
         -geometry "${client_width}x${client_height}" \
-        -PointerEventInterval=0 \
+        -FullScreen="$controller_fullscreen_value" \
+        -FullScreenMode=Current \
+        -FullscreenSystemKeys=1 \
+        -MenuKey=F8 \
+        -ViewOnly=0 \
+        -AlwaysCursor=1 \
+        -CursorType=System \
+        -PointerEventInterval=8 \
+        -AutoSelect=0 \
+        -FullColor=1 \
+        -PreferredEncoding=Raw \
         -Shared=1 \
         -RemoteResize=0 \
         -ReconnectOnError=0 \
@@ -1113,6 +1662,63 @@ open_window() {
         >>"$state_dir/window-viewer.log" 2>&1
     viewer_status=$?
     set -e
+    if [[ -r "$presentation_request_file" ]]; then
+        read -r requested_presentation <"$presentation_request_file" ||
+            requested_presentation=""
+    fi
+    if [[ -z "$requested_presentation" &&
+          "$controller_fullscreen" == auto &&
+          "$presentation_mode" == fullscreen ]]; then
+        # UU destroys the remote canvas before it re-activates the launcher.
+        # Since x11vnc is attached to that exact canvas with -id, it can exit
+        # before the monitor gets one last iteration in which to request the
+        # fullscreen -> windowed transition. Wait briefly for the launcher
+        # here in the owning process and make the transition deterministic.
+        # If the VNC server is still alive and UU still exposes a normal
+        # remote scene, this was an intentional F8 disconnect; the fail-closed
+        # recovery below ends that hidden session instead of waiting.
+        for _ in {1..20}; do
+            if controller_management_scene_active; then
+                requested_presentation=windowed
+                break
+            fi
+            if kill -0 "$window_vnc_pid" >/dev/null 2>&1 &&
+               controller_remote_session_active; then
+                break
+            fi
+            sleep 0.25
+        done
+    fi
+    if [[ "$requested_presentation" == windowed ||
+          "$requested_presentation" == fullscreen ]]; then
+        printf 'Switching UU controller presentation: %s -> %s\n' \
+            "$presentation_mode" "$requested_presentation" \
+            >>"$state_dir/window-viewer.log"
+        cleanup_window
+        exec 9>&-
+        exec "$script_path" window
+    fi
+    if [[ "$presentation_mode" == fullscreen ]] &&
+       { [[ "$controller_fullscreen" == auto ]] ||
+         controller_remote_session_active; }; then
+        # Disconnecting TigerVNC must never leave an invisible UU session
+        # controlling the peer. UU's confirmation surface is rendered inside
+        # the private Wine desktop, and a destroyed remote canvas can race the
+        # launcher by a few seconds. Fail closed in automatic mode as well:
+        # restart only this user bridge, then reopen on UU's device list with
+        # the account state preserved. Thus F8 is never a required second
+        # disconnect step and can never strand a still-controlled peer.
+        printf '%s\n' \
+            'The controller viewer closed during an active remote session; restarting UU to disconnect the peer.' \
+            >>"$state_dir/window-viewer.log"
+        cleanup_window
+        exec 9>&-
+        if ! "${systemctl_user[@]}" restart uu-remote-bridge.service; then
+            notify_error 'UU Remote could not safely end the hidden remote session.'
+            return 1
+        fi
+        exec "$script_path" window
+    fi
     return "$viewer_status"
 }
 

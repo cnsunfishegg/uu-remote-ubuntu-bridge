@@ -51,9 +51,12 @@ UU Terminal -> Wine ConPTY helper -> uu-terminal-proxy.exe
 `Xvfb` supplies a 1920x1080 display by default, and Openbox supplies basic
 window management. In automatic mode the launcher chooses the first unused X
 display from `:20` through `:99`; a validated fixed display and resolution can
-also be persisted by the installer. Both UU and the Windows SDL FreeRDP client
-use this display. UU therefore captures the FreeRDP window as if it were a
-normal Windows desktop application.
+also be persisted by the installer. On the native VNC/direct-X11-input profile,
+the host relay stays on screen 0 and the local UU controller GUI is launched
+on screen 1 of the **same** X server. This separates the captured canvases;
+it does not create independent pointer/keyboard devices or Wine namespaces.
+Other relay profiles retain their original display arrangement. On the RDP
+profile, UU captures the Windows FreeRDP window as an ordinary Windows app.
 
 After a forced Xvfb exit, cleanup removes a stale socket/lock only when the
 lock still names the exact Xvfb PID started by this bridge and that PID no
@@ -64,20 +67,38 @@ as a network service.
 
 ### Local management window
 
-`uu-remote open` keeps every process in the dedicated Wine prefix on the
-private X display. It maps the existing `GameViewer.exe` management window,
-binds `x11vnc` to that one X window and IPv4 loopback, and opens the result in
-TigerVNC on the logged-in GNOME desktop. The sidecar never exports the private
-root window, so the physical desktop cannot recurse through its own relay.
+`uu-remote open` uses the existing `GameViewer.exe` management window in the
+dedicated Wine prefix. It captures the selected X window with localhost-only
+`x11vnc` and presents it with TigerVNC on the logged-in GNOME desktop. A
+matching UU popup can temporarily change the capture mode. The sidecar does
+not export the complete private root canvas, so the physical desktop does not
+recurse into its own relay in the ordinary single-window mode.
 
-The launcher holds a per-user lock to prevent duplicate viewers. While it is
-open, a runtime marker permits the management window to be raised; the input
-broker can still focus the relay before each controller input. Closing or
-terminating the viewer stops the sidecar, minimizes the management window,
-removes the marker, and raises `Ubuntu-Desktop-Relay`. This design avoids
-Wine's process-global foreground state spanning two unrelated X displays,
-which otherwise makes `SetForegroundWindow` fail even when X11 reports the
-relay as active.
+The draggable management window uses direct `-id` capture so moving it cannot
+reveal the black Xvfb root between crop updates. A full-screen remote scene is
+captured from its exact root rectangle from the first framebuffer. Its source
+is stable, and this root clip composes UU's separate translucent toolbar,
+control-centre, and network-statistics windows instead of transmitting them as
+solid black rectangles. A management-window popup can temporarily use
+shifted-root `-sid` plus a full refresh; direct capture returns when it closes.
+
+The launcher holds a per-user lock to prevent duplicate viewers. On the
+independent-screen profile, closing the local viewer leaves the Wine GUI's
+backing window mapped and does not hide or focus the host relay. On legacy
+same-screen profiles, the console uses a focus marker while open, then
+minimizes its client and restores the host relay when closing. Screen-level
+separation alone cannot guarantee input isolation: host focus supervision,
+source capture, pointer targeting, and viewer focus still need end-to-end
+validation. See [the bidirectional control plan](bidirectional-control-plan.md)
+for the actual acceptance boundary and proposed controller coordination.
+
+The window coordinator publishes its current generation, selected source,
+actual x11vnc capture, geometry, scale, viewer, and lifecycle atomically at
+`$XDG_RUNTIME_DIR/uu-remote-console/controller.state`. The state contains no
+titles, account identifiers, text, clipboard data, or pixels. It is removed
+when the viewer exits. `uu-remote trace-controller` attaches the generation to
+each observed button/key boundary so a stale picture/input mapping can be
+distinguished from an event that never left the Linux viewer.
 
 The full private-display noVNC console remains an explicit diagnostic command,
 `uu-remote console`; it is not the desktop-launcher path.

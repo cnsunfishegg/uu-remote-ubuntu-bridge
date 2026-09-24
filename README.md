@@ -283,21 +283,29 @@ official UU account has been authenticated; merely opening the window is not
 proof that another device can connect. Check `uu-remote status` if it appears
 offline.
 
-This opens a TigerVNC window showing the active UU application region. The VNC
+This opens a TigerVNC window showing the active UU application window. The VNC
 sidecar follows UU's larger remote-session window and advertises its new
-framebuffer size to the viewer. When UU enters fullscreen, the local viewer
-also enters fullscreen; a locally requested fullscreen can still be toggled
-independently. Separate popups must still fit within the
+framebuffer size to the viewer. It captures the selected X window directly;
+isolated drag tests no longer expose the virtual desktop's black background
+between frames. An active UU popup overlapping the selected window
+temporarily uses a shifted view so the popup stays visible and clickable.
+The Linux titlebar owns physical window dragging; dragging UU's private source
+does not move a second desktop window. Either titlebar's maximize/restore control mirrors the other
+and uses the desktop work area rather than covering always-on-top panels.
+Minimize can be restored from the Linux taskbar. Separate popups must still fit within the
 currently selected window's rectangle. UU's client, host server,
 input broker, and `Ubuntu-Desktop-Relay` remain together on the private X display; a
 loopback-only VNC sidecar carries the application's screen region to GNOME.
 It does not expose the complete private desktop. It also avoids starting a
-second Wine prefix or splitting one Wine prefix across two X displays. Closing the window minimizes
-the UU client and restores relay focus automatically.
+second Wine prefix or splitting one Wine prefix across two X displays. Closing
+the local viewer does not stop the Ubuntu host. The independent-screen profile
+keeps the private UU window mapped for reopening; legacy same-screen profiles
+minimize it and restore the host relay.
 
 UU can create, hide, and destroy several top-level windows while connecting
 to another computer. Window switching and resizing pass isolated X11/VNC
-tests, but the complete remote session still needs a real two-computer
+tests, including frame-by-frame drag checks, popup input, native dragging, and keyboard-focus
+isolation, but the complete remote session still needs a real two-computer
 acceptance test; those local tests do not prove that UU's video will render.
 If a black band is already present in UU's private source window, this bridge
 cannot fill it by enlarging the VNC viewer. Changing the other computer's
@@ -693,6 +701,7 @@ The RDP hop targets loopback and pins GNOME's certificate fingerprint.
 | `scripts/uu-agent` | Runtime-discovered UU controller CLI and private-display diagnostics |
 | `scripts/upgrade-uu-remote.sh` | Fast-forward, guarded product promotion, runtime refresh, verification, and rollback |
 | `scripts/uu_connection_status.py` | Privacy-safe transport and key-watchdog diagnosis |
+| `scripts/uu_controller_trace.py` | Privacy-safe local-to-UU controller input boundary trace |
 | `scripts/configure-unattended.sh` | TPM-backed GDM autologin setup and rollback |
 | `scripts/uu-keyring-unlock.py` | Secret Service unlock before GNOME RDP |
 | `install.sh` / `uninstall.sh` | Idempotent setup and reversible removal |
@@ -704,6 +713,7 @@ ID, raw production log, screenshot, or private desktop content is committed.
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Bidirectional Ubuntu/Mac/Windows control plan and release gates](docs/bidirectional-control-plan.md)
 - [Changelog](CHANGELOG.md)
 - [v0.2.0 union release notes](docs/releases/v0.2.0.md)
 - [v0.1.0 release notes](docs/releases/v0.1.0.md)

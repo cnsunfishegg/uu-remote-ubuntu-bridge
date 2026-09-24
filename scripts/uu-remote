@@ -45,6 +45,7 @@ if [[ "$WINEPREFIX" != /* || "$wine_bin" != /* ||
 fi
 wine_stop_bin="$HOME/.local/libexec/uu-remote-stop-wine-prefix"
 connection_status_bin="$HOME/.local/libexec/uu-connection-status"
+controller_trace_bin="$HOME/.local/libexec/uu-controller-trace"
 registry_cleaner_bin="$HOME/.local/libexec/uu-clean-wine-device-registry"
 console_bin="$HOME/.local/bin/uu-remote-console"
 app_dir="$WINEPREFIX/drive_c/Program Files/Netease/GameViewer"
@@ -97,6 +98,14 @@ case "${1:-open}" in
         ;;
     network)
         exec /usr/bin/python3 "$connection_status_bin"
+        ;;
+    trace-controller)
+        shift || true
+        if [[ ! -x "$controller_trace_bin" ]]; then
+            notify_error 'The UU controller trace helper is not installed.'
+            exit 1
+        fi
+        exec /usr/bin/python3 "$controller_trace_bin" "$@"
         ;;
     repair-registry)
         if [[ ! -x "$registry_cleaner_bin" ]]; then
@@ -231,7 +240,7 @@ case "${1:-open}" in
         exec "$console_bin" open "$@"
         ;;
     *)
-        printf 'usage: uu-remote [open|control|console|protocol|login|status|network|repair-registry|restart|stop|logs|update|upgrade]\n' >&2
+        printf 'usage: uu-remote [open|control|console|protocol|login|status|network|trace-controller|repair-registry|restart|stop|logs|update|upgrade]\n' >&2
         exit 2
         ;;
 esac

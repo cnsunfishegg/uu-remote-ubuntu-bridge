@@ -152,6 +152,7 @@ rm -f \
     "$HOME/.local/bin/uu-link" \
     "$HOME/.local/libexec/uu-clean-wine-device-registry" \
     "$HOME/.local/libexec/uu-connection-status" \
+    "$HOME/.local/libexec/uu-controller-trace" \
     "$HOME/.local/libexec/uu-inspect-wine-device-registry.py" \
     "$HOME/.local/libexec/uu-remote-stop-wine-prefix" \
     "$HOME/.local/bin/uu-keyring-unlock" \

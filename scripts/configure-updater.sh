@@ -167,7 +167,8 @@ case "$command" in
 
         install -d -m 0700 "$config_dir" "$state_dir"
         install -d -m 0755 \
-            "$HOME/.local/bin" "$unit_dir" "$updater_libexec/scripts"
+            "$HOME/.local/bin" "$HOME/.local/libexec" "$unit_dir" \
+            "$updater_libexec/scripts"
         python3 - "$config_file" "$repo_dir" "$state_dir" "$branch" \
             "$track" "$model" "$reasoning_effort" "$idle_minutes" \
             "$auto_reinstall" "$auto_promote" "$codex_executable" <<'PY'
@@ -219,6 +220,8 @@ PY
             "$HOME/.local/bin/uu-remote"
         install -m 0755 "$repo_dir/scripts/uu-remote-console" \
             "$HOME/.local/bin/uu-remote-console"
+        install -m 0755 "$repo_dir/scripts/uu_controller_trace.py" \
+            "$HOME/.local/libexec/uu-controller-trace"
         install -m 0755 \
             "$repo_dir/scripts/promote-approved-release.py" \
             "$repo_dir/scripts/stop-wine-prefix" \

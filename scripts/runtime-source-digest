@@ -23,6 +23,7 @@ runtime_files=(
     scripts/runtime-source-digest
     scripts/stop-wine-prefix
     scripts/uu_connection_status.py
+    scripts/uu_controller_trace.py
     scripts/uu-keyring-unlock.py
     scripts/uu-agent
     scripts/uu-ssh

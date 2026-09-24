@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the real console against two isolated X displays, never the user's UU.
 
-Exercises minimize/restore, transient iconification during session disposal,
+Exercises dragging, focus isolation, minimize/restore, transient iconification,
 viewport scaling, and inner-close cleanup using real Openbox and TigerVNC.
 """
 import os
@@ -72,6 +72,24 @@ def main():
             def state(env, window):
                 return run(env, "xprop", "-id", window, "WM_STATE")
 
+            def geometry(env, window):
+                return {key: int(value) for key, value in (
+                    line.split("=", 1) for line in run(
+                        env, "xdotool", "getwindowgeometry", "--shell", window
+                    ).splitlines() if "=" in line)}
+
+            def root_geometry(env, window):
+                details = run(env, "xwininfo", "-id", window, "-stats")
+                labels = {"Absolute upper-left X:": "X", "Absolute upper-left Y:": "Y",
+                          "Width:": "WIDTH", "Height:": "HEIGHT"}
+                result = {}
+                for line in details.splitlines():
+                    for label, key in labels.items():
+                        if line.strip().startswith(label):
+                            result[key] = int(line.rsplit(" ", 1)[-1])
+                assert len(result) == 4, details
+                return result
+
             try:
                 host = display(two_screens=True)
                 source = {**host, "DISPLAY": host["DISPLAY"] + ".1"}
@@ -79,6 +97,10 @@ def main():
                 wait_for("controller WM missing", lambda: "WINDOW" in run(
                     source, "xprop", "-root", "_NET_SUPPORTING_WM_CHECK"))
                 desktop = display()
+                # The default controller is a single native full-screen shell.
+                # This isolated test opts into the diagnostic windowed mode so
+                # it can exercise native dragging and arbitrary viewport sizes.
+                desktop["UURB_CONTROLLER_FULLSCREEN"] = "off"
                 panel = start(["xmessage", "-name", "Test top panel", "-geometry", "1600x50+0+0", "Panel"], desktop)
                 panel_id = wait_for("panel fixture missing", lambda: run(
                     desktop, "xdotool", "search", "--onlyvisible", "--name", "^Test top panel$"))
@@ -110,30 +132,207 @@ def main():
                 # local controller which legitimately appears in the relay.
                 def host_content():
                     return ImageGrab.grab(xdisplay=host["DISPLAY"]).crop((1450, 800, 1550, 900)).tobytes()
-                host_pixels = ImageGrab.grab(xdisplay=desktop["DISPLAY"]).crop((1450, 800, 1550, 900)).tobytes()
-                wait_for("host did not paint physical desktop", lambda: host_content() == host_pixels)
+                def physical_content():
+                    return ImageGrab.grab(xdisplay=desktop["DISPLAY"]).crop(
+                        (1450, 800, 1550, 900)).tobytes()
+                wait_for("host did not paint physical desktop", lambda: host_content() == physical_content())
 
                 def host_unchanged():
                     assert "Normal" in state(host, relay_id), "controller minimized the host relay"
                     assert not (private / "console-focus").exists(), "controller took host focus lease"
-                    assert host_content() == host_pixels, "controller overwrote host canvas"
+                    wait_for("controller overwrote host canvas", lambda: (
+                        host_content() == physical_content()))
 
                 launcher, launcher_id = app(source, "Lifecycle launcher", "600x450+80+60")
+                # Reproduce a previous bad drag persisted beyond the virtual
+                # root before the controller is opened again.
+                run(source, "xdotool", "windowmove", launcher_id, "1500", "900")
                 with socket.socket() as reservation:
                     reservation.bind(("127.0.0.1", 0))
                     port = reservation.getsockname()[1]
                 desktop["UURB_CONSOLE_VNC_PORT"] = str(port - 1)
                 console = start([str(REPO / "scripts/uu-remote-console"), "window"], desktop)
+                channel = f"UURB_WINDOW_{os.getuid()}_{port}_{console.pid}"
                 viewer = wait_for("viewer did not open", lambda: run(
                     desktop, "xdotool", "search", "--name", "^UU Remote - TigerVNC$"))
+                wait_for("new viewer did not take keyboard focus", lambda: (
+                    run(desktop, "xdotool", "getactivewindow") == viewer))
+                wait_for("off-screen launcher not repaired at startup", lambda: (
+                    root_geometry(source, launcher_id)["X"] == 1000 and
+                    root_geometry(source, launcher_id)["Y"] == 550 and
+                    geometry(desktop, viewer)["WIDTH"] == 600 and
+                    geometry(desktop, viewer)["HEIGHT"] == 450))
                 wait_for("launcher not mapped", lambda: "Normal" in state(source, launcher_id))
-                wait_for("outer decoration was not removed", lambda: "2, 0, 0, 0, 0" in run(
-                    desktop, "xprop", "-id", viewer, "-f", "_MOTIF_WM_HINTS", "32c", "_MOTIF_WM_HINTS"))
-                wait_for("WM still shows a second titlebar", lambda: "= 0, 0, 0, 0" in run(
+                controller_state_file = runtime / "uu-remote-console/controller.state"
+
+                def controller_state():
+                    if not controller_state_file.exists():
+                        return {}
+                    return dict(
+                        line.split("=", 1)
+                        for line in controller_state_file.read_text().splitlines()
+                        if "=" in line
+                    )
+
+                wait_for("controller coordinator state is not ready", lambda: (
+                    controller_state().get("lifecycle") == "ready" and
+                    controller_state().get("candidate_window") == launcher_id and
+                    controller_state().get("capture_window") == launcher_id and
+                    int(controller_state().get("generation", "0")) >= 1))
+                print("PASS coordinator publishes one capture/input state", flush=True)
+                wait_for("native titlebar is missing", lambda: "= 1, 1, 22, 5" in run(
                     desktop, "xprop", "-id", viewer, "_NET_FRAME_EXTENTS"))
-                print("PASS only the inner UU window controls remain", flush=True)
+                print("PASS physical viewer owns a native titlebar", flush=True)
                 host_unchanged()
-                time.sleep(0.6)  # Establish the initial source in the real monitor.
+                def canvas_matches():
+                    inner = root_geometry(source, launcher_id)
+                    outer = root_geometry(desktop, viewer)
+                    source_pixels = ImageGrab.grab(xdisplay=source["DISPLAY"]).crop((
+                        inner["X"] + 5, inner["Y"] + 5,
+                        inner["X"] + 100, inner["Y"] + 100)).tobytes()
+                    viewer_pixels = ImageGrab.grab(xdisplay=desktop["DISPLAY"]).crop((
+                        outer["X"] + 5, outer["Y"] + 5,
+                        outer["X"] + 100, outer["Y"] + 100)).tobytes()
+                    return source_pixels == viewer_pixels
+                wait_for("viewer crop does not match private client pixels", canvas_matches)
+                print("PASS viewer pixels line up with the private client", flush=True)
+
+                outer_before = geometry(desktop, viewer)
+                inner_before = root_geometry(source, launcher_id)
+                drag_x = outer_before["X"] + outer_before["WIDTH"] // 2
+                # xdotool reports the Openbox decoration offset twice.
+                drag_y = outer_before["Y"] - 33
+                run(desktop, "xdotool", "mousemove", str(drag_x), str(drag_y),
+                    "mousedown", "1", "sleep", "0.2", "mousemove",
+                    str(drag_x + 30), str(drag_y + 20), "sleep", "0.2",
+                    "mousemove", str(drag_x + 120), str(drag_y + 80),
+                    "sleep", "0.2", "mouseup", "1")
+                try:
+                    wait_for("native titlebar did not drag the visible window", lambda: (
+                        geometry(desktop, viewer)["X"] == outer_before["X"] + 120 and
+                        geometry(desktop, viewer)["Y"] == outer_before["Y"] + 80))
+                except AssertionError as error:
+                    raise AssertionError((str(error), outer_before,
+                                          geometry(desktop, viewer), drag_x, drag_y)) from error
+                assert root_geometry(source, launcher_id) == inner_before, (
+                    "outer drag moved the private UU window", root_geometry(source, launcher_id))
+                print("PASS native drag moves only the physical window", flush=True)
+                outer_after_drag = geometry(desktop, viewer)
+                run(source, "xdotool", "windowmove", launcher_id, "200", "140")
+                try:
+                    wait_for("private source did not move", lambda: (
+                        root_geometry(source, launcher_id)["X"] == 201 and
+                        root_geometry(source, launcher_id)["Y"] == 162))
+                except AssertionError as error:
+                    raise AssertionError((str(error), outer_after_drag, inner_before,
+                                          geometry(desktop, viewer),
+                                          root_geometry(source, launcher_id))) from error
+                assert geometry(desktop, viewer) == outer_after_drag, (
+                    "source motion dragged the physical viewer", geometry(desktop, viewer))
+                wait_for("source motion left the viewer pixels behind", canvas_matches)
+                run(source, "xdotool", "windowmove", launcher_id, "1500", "900")
+                try:
+                    wait_for("inner window escaped its root canvas", lambda: (
+                        root_geometry(source, launcher_id)["X"] == 1000 and
+                        root_geometry(source, launcher_id)["Y"] == 550))
+                except AssertionError as error:
+                    raise AssertionError((str(error), root_geometry(source, launcher_id),
+                                          run(source, "xprop", "-id", launcher_id,
+                                              "_NET_FRAME_EXTENTS"))) from error
+                assert geometry(desktop, viewer)["WIDTH"] >= 600, (
+                    "dragging collapsed the viewer to black", geometry(desktop, viewer))
+                assert geometry(desktop, viewer) == outer_after_drag, (
+                    "source edge clamp moved the physical viewer", geometry(desktop, viewer))
+                wait_for("edge clamp left a black or shifted canvas", canvas_matches)
+                print("PASS private source stays within bounds without moving its frame", flush=True)
+
+                # A root-coordinate crop can be perfectly aligned after a
+                # drag yet expose the black virtual desktop in intermediate
+                # frames. Sample the full visible client while moving it
+                # repeatedly, before the shell monitor can catch up.
+                misaligned_frames = 0
+                for index in range(24):
+                    target_x = 200 + (index % 6) * 70
+                    target_y = 140 + (index % 6) * 35
+                    run(source, "xdotool", "windowmove", launcher_id,
+                        str(target_x), str(target_y))
+                    if not canvas_matches():
+                        misaligned_frames += 1
+                assert misaligned_frames == 0, (
+                    f"{misaligned_frames} intermediate drag frames exposed the private root")
+                print("PASS repeated source motion never exposes a black intermediate frame", flush=True)
+
+                source_box = root_geometry(source, launcher_id)
+                popup_x = source_box["X"] + 120
+                popup_y = source_box["Y"] + 110
+                popup = start(["xmessage", "-name", "Lifecycle popup",
+                               "-bg", "#ff0000", "-fg", "#ff0000",
+                               "-geometry", f"160x110+{popup_x}+{popup_y}",
+                               "Overlay"], source)
+                popup_id = wait_for("popup fixture missing", lambda: run(
+                    source, "xdotool", "search", "--name", "^Lifecycle popup$"))
+                run(source, "xdotool", "set_window", "--class", "gameviewer.exe",
+                    popup_id.splitlines()[-1])
+                run(source, "xdotool", "windowactivate", popup_id.splitlines()[-1])
+                popup_box = root_geometry(source, popup_id.splitlines()[-1])
+                sample_x = popup_box["X"] + 75
+                sample_y = popup_box["Y"] + 60
+                def source_popup_red():
+                    return ImageGrab.grab(xdisplay=source["DISPLAY"]).getpixel((
+                        sample_x, sample_y))[:3] == (255, 0, 0)
+                wait_for("popup did not paint over private source", source_popup_red)
+                outer_box = root_geometry(desktop, viewer)
+                popup_sample = (outer_box["X"] + sample_x - source_box["X"],
+                                outer_box["Y"] + sample_y - source_box["Y"])
+                try:
+                    wait_for("automatic shifted capture did not reveal popup", lambda: (
+                        ImageGrab.grab(xdisplay=desktop["DISPLAY"]).getpixel(
+                            popup_sample)[:3] == (255, 0, 0)))
+                    wait_for("popup did not select refreshed shifted capture", lambda: (
+                        controller_state().get("capture_mode") == "sid" and
+                        controller_state().get("capture_window") == launcher_id))
+                except AssertionError as error:
+                    raise AssertionError((str(error), popup_sample,
+                        popup.poll(), state(source, popup_id.splitlines()[-1]),
+                        run(source, "xdotool", "getactivewindow"),
+                        run(source, "xprop", "-id", popup_id.splitlines()[-1], "WM_CLASS"),
+                        source_box, popup_box,
+                        run(source, "x11vnc", "-env", "X11VNC_REMOTE=" + channel, "-Q", "sid"),
+                        run(source, "x11vnc", "-env", "X11VNC_REMOTE=" + channel, "-Q", "id"))) from error
+                print("PASS temporary shifted capture shows private popup", flush=True)
+                run(desktop, "xdotool", "mousemove", "--window", viewer,
+                    str(popup_sample[0] - outer_box["X"]),
+                    str(popup_sample[1] - outer_box["Y"]), "click", "1")
+                popup_pointer = {key: int(value) for key, value in (
+                    line.split("=", 1) for line in run(
+                        source, "xdotool", "getmouselocation", "--shell"
+                    ).splitlines() if line.startswith(("X=", "Y=")))}
+                assert abs(popup_pointer["X"] - sample_x) <= 2, popup_pointer
+                assert abs(popup_pointer["Y"] - sample_y) <= 2, popup_pointer
+                assert popup.poll() is None, "popup closed unexpectedly during input"
+                print("PASS popup receives pointer input", flush=True)
+                popup.terminate()
+                popup.wait(timeout=3)
+                wait_for("direct capture did not return after popup", lambda: (
+                    hex(int(launcher_id)) in run(source, "x11vnc", "-env",
+                        "X11VNC_REMOTE=" + channel, "-Q", "id")))
+                try:
+                    wait_for("direct capture did not recover after popup", canvas_matches)
+                except AssertionError as error:
+                    raise AssertionError((str(error), controller_state(),
+                        run(source, "x11vnc", "-env", "X11VNC_REMOTE=" + channel,
+                            "-Q", "id"),
+                        run(source, "x11vnc", "-env", "X11VNC_REMOTE=" + channel,
+                            "-Q", "clip"),
+                        root_geometry(source, launcher_id),
+                        root_geometry(desktop, viewer))) from error
+
+                run(desktop, "xdotool", "windowminimize", viewer)
+                wait_for("native minimize failed", lambda: "Iconic" in state(desktop, viewer))
+                assert "Normal" in state(source, launcher_id), "native minimize hid UU source"
+                run(desktop, "xdotool", "windowmap", viewer, "windowactivate", viewer)
+                wait_for("native taskbar restore failed", lambda: "Normal" in state(desktop, viewer))
+                print("PASS native minimize and restore keep the source painted", flush=True)
 
                 run(source, "xdotool", "windowminimize", launcher_id)
                 wait_for("inner minimize did not minimize viewer", lambda: "Iconic" in state(desktop, viewer))
@@ -145,7 +344,6 @@ def main():
                 host_unchanged()
 
                 run(desktop, "xdotool", "windowsize", viewer, "420", "330")
-                channel = f"UURB_WINDOW_{os.getuid()}_{port}_{console.pid}"
                 # Remote commands share one X property. Polling -Q rapidly
                 # can overwrite the monitor's pending -R scale request.
                 time.sleep(2)
@@ -154,6 +352,26 @@ def main():
                     "viewport scaling was not applied: " + answer + " / " +
                     run(desktop, "xdotool", "getwindowgeometry", "--shell", viewer))
                 print("PASS smaller viewport scales the complete source", flush=True)
+                scaled_outer = geometry(desktop, viewer)
+                for step in ((993, 501), (988, 496)):
+                    run(source, "xdotool", "windowmove", launcher_id,
+                        str(step[0]), str(step[1]))
+                    time.sleep(0.7)
+                assert geometry(desktop, viewer) == scaled_outer, (
+                    "scaled source movement dragged the physical viewer", geometry(desktop, viewer))
+                def current_source():
+                    return run(source, "x11vnc", "-env", "X11VNC_REMOTE=" + channel,
+                               "-Q", "id")
+                wait_for("window-bound VNC capture lost its source", lambda: (
+                    hex(int(launcher_id)) in current_source()))
+                def scaled_viewer_painted():
+                    outer = root_geometry(desktop, viewer)
+                    return ImageGrab.grab(xdisplay=desktop["DISPLAY"]).getpixel((
+                        outer["X"] + 200, outer["Y"] + 100))[:3] == (255, 255, 255)
+                wait_for("window-bound capture went black after drag", scaled_viewer_painted)
+                assert "0.700000" in run(source, "x11vnc", "-env", "X11VNC_REMOTE=" + channel,
+                                          "-Q", "scale"), "source movement reset viewport scaling"
+                print("PASS scaled source motion leaves the physical frame alone", flush=True)
                 events_before = (root / "process.log").read_text(errors="replace")
                 run(desktop, "xdotool", "mousemove", "--window", viewer,
                     "210", "165", "click", "1", "key", "a")
@@ -163,25 +381,54 @@ def main():
                                for event in ("ButtonPress event", "KeyPress event"))
                 wait_for("scaled viewer did not forward mouse and keyboard", input_arrived)
                 pointer = dict(line.split("=", 1) for line in run(source, "xdotool", "getmouselocation", "--shell").splitlines())
-                geometry = dict(line.split("=", 1) for line in run(source, "xdotool", "getwindowgeometry", "--shell", launcher_id).splitlines())
+                source_geometry = root_geometry(source, launcher_id)
                 # Test the viewport center; TigerVNC centers the 420x315
                 # framebuffer within the taller 420x330 viewport.
-                assert abs(int(pointer["X"]) - int(geometry["X"]) - 300) <= 2, (pointer, geometry)
-                assert abs(int(pointer["Y"]) - int(geometry["Y"]) - 225) <= 2, (pointer, geometry)
+                assert abs(int(pointer["X"]) - source_geometry["X"] - 300) <= 2, (pointer, source_geometry)
+                assert abs(int(pointer["Y"]) - source_geometry["Y"] - 225) <= 2, (pointer, source_geometry)
                 print("PASS scaled mouse and keyboard reach source", flush=True)
 
-                run(source, "wmctrl", "-ir", hex(int(launcher_id)), "-b", "add,maximized_vert,maximized_horz")
-                wait_for("inner maximize did not maximize local viewer", lambda: "MAXIMIZED_VERT" in run(
-                    desktop, "xprop", "-id", viewer, "_NET_WM_STATE"))
-                maximized_state = run(desktop, "xprop", "-id", viewer, "_NET_WM_STATE")
-                assert "FULLSCREEN" not in maximized_state, maximized_state
-                viewer_geometry = dict(line.split("=", 1) for line in run(
-                    desktop, "xdotool", "getwindowgeometry", "--shell", viewer).splitlines())
-                assert int(viewer_geometry["Y"]) >= 50, viewer_geometry
-                run(source, "wmctrl", "-ir", hex(int(launcher_id)), "-b", "remove,maximized_vert,maximized_horz")
-                wait_for("inner restore left viewer maximized", lambda: "MAXIMIZED_VERT" not in run(
-                    desktop, "xprop", "-id", viewer, "_NET_WM_STATE"))
-                print("PASS maximize/restore keeps controls below the top panel", flush=True)
+                local_log_path = root / "local-input.log"
+                with local_log_path.open("wb") as local_log:
+                    local_input = subprocess.Popen(
+                        ["xev", "-name", "Local typing fixture", "-geometry", "200x150+0+700"],
+                        env=desktop, stdout=local_log, stderr=log)
+                    children.append(local_input)
+                    local_id = wait_for("local input fixture missing", lambda: run(
+                        desktop, "xdotool", "search", "--name", "^Local typing fixture$"))
+                    run(desktop, "xdotool", "windowactivate", local_id.splitlines()[-1])
+                    remote_before = (root / "process.log").read_text(errors="replace").count("KeyPress event")
+                    run(desktop, "xdotool", "key", "b")
+                    wait_for("local typing did not reach local fixture", lambda: (
+                        "KeyPress event" in local_log_path.read_text(errors="replace")))
+                    assert (root / "process.log").read_text(errors="replace").count(
+                        "KeyPress event") == remote_before, "local typing leaked to remote"
+                    local_before = local_log_path.read_text(errors="replace").count("KeyPress event")
+                    run(desktop, "xdotool", "mousemove", "--window", viewer,
+                        "210", "165", "click", "1", "key", "c")
+                    wait_for("remote typing did not reach remote fixture", lambda: (
+                        (root / "process.log").read_text(errors="replace").count(
+                            "KeyPress event") > remote_before))
+                    assert local_log_path.read_text(errors="replace").count(
+                        "KeyPress event") == local_before, "remote typing leaked to local app"
+                    local_input.terminate()
+                    local_input.wait(timeout=3)
+                print("PASS keyboard goes only to the focused local or remote window", flush=True)
+
+                viewer_state_before = run(
+                    desktop, "xprop", "-id", viewer, "_NET_WM_STATE")
+                run(source, "wmctrl", "-ir", hex(int(launcher_id)), "-b",
+                    "add,maximized_vert,maximized_horz")
+                wait_for("private maximize did not apply", lambda: "MAXIMIZED_VERT" in run(
+                    source, "xprop", "-id", launcher_id, "_NET_WM_STATE"))
+                assert run(desktop, "xprop", "-id", viewer,
+                           "_NET_WM_STATE") == viewer_state_before, (
+                    "private controls changed the presentation shell")
+                run(source, "wmctrl", "-ir", hex(int(launcher_id)), "-b",
+                    "remove,maximized_vert,maximized_horz")
+                wait_for("private restore did not apply", lambda: "MAXIMIZED_VERT" not in run(
+                    source, "xprop", "-id", launcher_id, "_NET_WM_STATE"))
+                print("PASS UU controls do not create a second shell state", flush=True)
 
                 session, session_id = app(source, "Lifecycle session", "900x650+0+0")
                 run(source, "xdotool", "windowminimize", launcher_id)
@@ -203,9 +450,81 @@ def main():
                 wait_for("inner close did not exit viewer", lambda: console.poll() is not None)
                 assert not (private / "console-focus").exists(), "stale controller lease"
                 assert not (runtime / "uu-remote-console/window.port").exists(), "stale controller port"
+                assert not controller_state_file.exists(), "stale controller state"
                 print("PASS inner close cleans viewer and lease", flush=True)
                 host_unchanged()
                 print("PASS host framebuffer remains identical throughout controller lifecycle", flush=True)
+
+                # Automatic presentation is the normal user path: the UU
+                # launcher is a borderless app-sized window, a remote canvas
+                # gets a freshly-created full-screen viewer, and destroying
+                # that canvas returns to a fresh launcher viewer even when
+                # x11vnc exits before its monitor sees the scene change.
+                desktop["UURB_CONTROLLER_FULLSCREEN"] = "auto"
+                manager, manager_id = app(
+                    source, "Lifecycle manager", "920x680+200+120")
+                run(source, "xdotool", "set_window", "--name", "网易UU远程",
+                    manager_id)
+                wait_for("localized manager title was not applied", lambda: (
+                    run(source, "xdotool", "getwindowname", manager_id) ==
+                    "网易UU远程"))
+                console = start([str(REPO / "scripts/uu-remote-console"), "window"], desktop)
+
+                def active_controller_state(expected_mode, expected_window):
+                    current = controller_state()
+                    return (
+                        current.get("lifecycle") == "ready" and
+                        current.get("presentation_mode") == expected_mode and
+                        current.get("candidate_window") == expected_window
+                    )
+
+                wait_for("automatic launcher did not open windowed", lambda: (
+                    active_controller_state("windowed", manager_id)))
+                viewer = wait_for("automatic launcher viewer missing", lambda: run(
+                    desktop, "xdotool", "search", "--name", "^UU Remote - TigerVNC$"))
+                wait_for("automatic launcher kept a second Linux titlebar", lambda: (
+                    "= 0, 0, 0, 0" in run(
+                        desktop, "xprop", "-id", viewer.splitlines()[-1],
+                        "_NET_FRAME_EXTENTS")))
+                assert geometry(desktop, viewer.splitlines()[-1])["WIDTH"] == 920
+                assert geometry(desktop, viewer.splitlines()[-1])["HEIGHT"] == 680
+                print("PASS automatic device list is one borderless 920x680 window", flush=True)
+
+                session, session_id = app(source, "Lifecycle remote canvas", "1536x904+0+0")
+                run(source, "xdotool", "windowminimize", manager_id)
+                run(source, "xdotool", "windowactivate", session_id)
+                wait_for("remote canvas did not recreate a full-screen viewer", lambda: (
+                    active_controller_state("fullscreen", session_id)), timeout=20)
+                current = controller_state()
+                assert current.get("source_width") == "1536", current
+                assert current.get("source_height") == "904", current
+                assert current.get("viewer_maximized") == "true", current
+                assert current.get("scale") == "1.041666", current
+                assert current.get("capture_mode") == "root-clip", current
+                print("PASS entering remote control is full-screen and scaled on first frame", flush=True)
+
+                # Reproduce the real UU ordering: its remote window disappears
+                # first, the launcher becomes visible shortly afterwards.
+                session.terminate()
+                session.wait(timeout=3)
+                time.sleep(0.4)
+                run(source, "xdotool", "windowmap", manager_id,
+                    "windowactivate", manager_id)
+                wait_for("remote exit did not recreate the launcher viewer", lambda: (
+                    active_controller_state("windowed", manager_id)), timeout=20)
+                viewer = wait_for("returned launcher viewer missing", lambda: run(
+                    desktop, "xdotool", "search", "--name", "^UU Remote - TigerVNC$"))
+                wait_for("returned launcher regained a Linux titlebar", lambda: (
+                    "= 0, 0, 0, 0" in run(
+                        desktop, "xprop", "-id", viewer.splitlines()[-1],
+                        "_NET_FRAME_EXTENTS")))
+                assert console.poll() is None, "automatic controller exited instead of returning"
+                print("PASS remote exit automatically returns to the device list without F8", flush=True)
+
+                run(source, "xdotool", "windowunmap", manager_id)
+                wait_for("automatic controller did not close with its launcher", lambda: (
+                    console.poll() is not None))
+                host_unchanged()
             except Exception:
                 for name in ("window-x11vnc.log", "window-viewer.log"):
                     path = root / "state/uu-remote-console" / name

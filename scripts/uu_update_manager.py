@@ -1432,6 +1432,7 @@ class Manager:
             home / ".local/bin/uu-remote-console",
             home / ".local/bin/uu-keyring-unlock",
             home / ".local/libexec/uu-connection-status",
+            home / ".local/libexec/uu-controller-trace",
             home / ".local/libexec/uu-remote-stop-wine-prefix",
             home / ".config/uu-remote-bridge/environment",
             home / ".config/systemd/user/uu-remote-bridge.service",

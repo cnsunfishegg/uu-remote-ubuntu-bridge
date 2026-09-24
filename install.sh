@@ -610,7 +610,7 @@ install_packages() {
         libxml2-utils libxtst6 meson novnc \
         ninja-build openbox openssl p7zip-full patch python3 python3-attr \
         python3-gi python3-jinja2 tar tigervnc-viewer websockify \
-        x11-utils x11vnc xauth xclip \
+        x11-utils x11vnc xauth xclip xinput \
         xdotool xvfb wmctrl zstd
     install_winehq
 }
@@ -673,7 +673,7 @@ for command in curl meson ninja patch readelf sha256sum /usr/bin/systemctl \
     /usr/bin/awk /usr/bin/ip /usr/bin/mcookie /usr/bin/openbox \
     /usr/bin/script /usr/bin/sort /usr/bin/ss /usr/bin/xauth \
     /usr/bin/vncviewer /usr/bin/websockify /usr/bin/x11vnc /usr/bin/xclip \
-    /usr/bin/xdotool /usr/bin/wmctrl \
+    /usr/bin/xdotool /usr/bin/wmctrl /usr/bin/xinput \
     /usr/libexec/gnome-remote-desktop-daemon; do
     if ! command -v "$command" >/dev/null 2>&1; then
         printf 'missing required command: %s\n' "$command" >&2
@@ -1032,6 +1032,8 @@ install -m 0755 "$repo_dir/scripts/inspect-wine-device-registry.py" \
     "$HOME/.local/libexec/uu-inspect-wine-device-registry.py"
 install -m 0755 "$repo_dir/scripts/uu_connection_status.py" \
     "$HOME/.local/libexec/uu-connection-status"
+install -m 0755 "$repo_dir/scripts/uu_controller_trace.py" \
+    "$HOME/.local/libexec/uu-controller-trace"
 install -m 0755 "$repo_dir/scripts/uu-keyring-unlock.py" \
     "$HOME/.local/bin/uu-keyring-unlock"
 install -m 0644 "$repo_dir/systemd/uu-remote-bridge.service" \

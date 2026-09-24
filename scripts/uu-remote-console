@@ -46,6 +46,7 @@ vnc_pid=""
 websockify_pid=""
 window_vnc_pid=""
 window_monitor_pid=""
+window_focus_pid=""
 window_remote_channel=""
 relay_focus_pid=""
 
@@ -598,6 +599,7 @@ cleanup_server() {
 cleanup_window() {
     trace_controller_timing 'cleanup begin'
     trap - EXIT INT TERM HUP
+    stop_window_child "$window_focus_pid"
     stop_window_child "$window_monitor_pid"
     stop_window_child "$window_vnc_pid"
     release_client || true
@@ -999,7 +1001,7 @@ monitor_private_scene() {
             fi
         fi
         candidate="$(find_scene_window --known-display | /usr/bin/tail -n 1)"
-        if [[ "$presentation_fullscreen" == false && -z "$viewer_window" ]]; then
+        if [[ -z "$viewer_window" ]]; then
             viewer_window="$(find_local_viewer_window || true)"
         fi
         if [[ "$presentation_fullscreen" == false && -n "$viewer_window" &&
@@ -1008,14 +1010,19 @@ monitor_private_scene() {
             set_local_viewer_borderless "$viewer_window" || true
             viewer_styled=true
         fi
-        if [[ "$presentation_fullscreen" == false && -n "$viewer_window" &&
+        if [[ -n "$viewer_window" &&
               "$initial_viewer_focused" == false ]]; then
-            # A launcher started from another application may map without
-            # receiving keyboard focus. Focus once, never steal it back
-            # after the user deliberately switches to a local app.
-            if /usr/bin/xdotool windowactivate "$viewer_window" \
+            # Both the launcher and the recreated full-screen viewer can map
+            # before TigerVNC owns physical input.  In full-screen mode that
+            # race lets the first wheel event reach Xfwm's workspace switcher;
+            # the event then focuses TigerVNC, making only later scrolls work.
+            # Activate exactly once, never steal focus back after the user
+            # deliberately switches to another local application.
+            if /usr/bin/xdotool windowactivate --sync "$viewer_window" \
                 >/dev/null 2>&1; then
                 initial_viewer_focused=true
+                trace_controller_timing \
+                    "viewer initially focused window=$viewer_window mode=$presentation_mode"
             fi
         fi
         # Closing UU hides it to Wine's tray. Do not leave a live black
@@ -1406,6 +1413,35 @@ find_local_viewer_window() {
     )
     [[ -n "$window" ]] || return 1
     printf '%s\n' "$window"
+}
+
+focus_local_viewer_when_mapped() {
+    local mode="$1"
+    local active=""
+    local viewer=""
+
+    # TigerVNC is started in the foreground below, so prepare the focus handoff
+    # first.  Polling every 20 ms closes the short map-to-focus gap in which an
+    # initial wheel event can otherwise reach Xfwm's workspace bindings.
+    for _ in {1..200}; do
+        viewer="$(find_local_viewer_window || true)"
+        if [[ -n "$viewer" ]]; then
+            /usr/bin/xdotool windowactivate "$viewer" >/dev/null 2>&1 ||
+                return 1
+            for _ in {1..20}; do
+                active="$(/usr/bin/xdotool getactivewindow 2>/dev/null || true)"
+                if [[ "$active" == "$viewer" ]]; then
+                    trace_controller_timing \
+                        "viewer map focus complete window=$viewer mode=$mode"
+                    return 0
+                fi
+                sleep 0.01
+            done
+            return 1
+        fi
+        sleep 0.02
+    done
+    return 1
 }
 
 set_local_viewer_borderless() {
@@ -1969,6 +2005,10 @@ open_window() {
         return 1
     fi
     trace_controller_timing 'x11vnc listener ready'
+
+    focus_local_viewer_when_mapped "$presentation_mode" 9>&- &
+    window_focus_pid=$!
+    trace_controller_timing "focus guard spawned pid=$window_focus_pid"
 
     monitor_private_scene "$client_window" \
         "$presentation_width" "$presentation_height" \

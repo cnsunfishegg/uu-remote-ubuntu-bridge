@@ -80,6 +80,20 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertIn('controller_remote_session_active', window)
         self.assertIn('request_presentation_mode "$desired_presentation"', SOURCE)
         self.assertIn('set_local_viewer_borderless "$viewer_window"', SOURCE)
+        self.assertIn(
+            'windowactivate --sync "$viewer_window"', SOURCE
+        )
+        self.assertIn("focus_local_viewer_when_mapped()", SOURCE)
+        self.assertIn(
+            'focus_local_viewer_when_mapped "$presentation_mode"', SOURCE
+        )
+        self.assertIn('sleep 0.02', SOURCE)
+        self.assertIn('stop_window_child "$window_focus_pid"', SOURCE)
+        self.assertIn('if [[ -z "$viewer_window" ]]', SOURCE)
+        self.assertNotIn(
+            'if [[ "$presentation_fullscreen" == false && -z "$viewer_window" ]]',
+            SOURCE,
+        )
         self.assertIn('exec "$script_path" window', window)
         self.assertIn('restart uu-remote-bridge.service', window)
         self.assertLess(

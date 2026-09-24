@@ -549,12 +549,25 @@ def main():
                 assert current.get("source_width") == "1600", current
                 assert int(current.get("source_height", "0")) >= 936, current
                 assert current.get("viewer_maximized") == "true", current
+
+                def focused_fullscreen_viewer():
+                    viewer = controller_state().get("viewer_window", "0")
+                    if (int(viewer) > 0 and
+                            run(desktop, "xdotool", "getactivewindow") == viewer):
+                        return viewer
+                    return ""
+
+                fullscreen_viewer = wait_for(
+                    "full-screen viewer was not focused before first input",
+                    focused_fullscreen_viewer,
+                )
+                current = controller_state()
                 assert current.get("scale") == "1.000000", current
                 assert current.get("capture_mode") == "root-clip", current
                 enter_elapsed = time.monotonic() - enter_started
                 print(
                     "PASS bootstrap canvas reaches native resolution before "
-                    "full-screen on "
+                    "full-screen and owns first input on "
                     f"first frame ({enter_elapsed:.2f}s)", flush=True)
 
                 # UU 4.39 implements its exit confirmation as a second,

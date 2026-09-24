@@ -492,6 +492,11 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn('capture_mode=sid', console)
         self.assertIn('script:sid:$candidate;refresh', console)
         self.assertIn('capture_mode=root-clip', console)
+        self.assertIn("shape_fullscreen_dialog_overlay()", console)
+        self.assertIn("XShapeCombineRectangles", console)
+        self.assertIn(
+            'shape_fullscreen_dialog_overlay "$candidate"', console
+        )
         self.assertIn('-R "$capture_command"', console)
         self.assertIn('viewer_fit_scale "$width" "$height" "$viewer_window"', console)
         self.assertIn("/usr/bin/flock -n 9", console)

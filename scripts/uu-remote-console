@@ -189,9 +189,16 @@ find_client_window() {
         state="$(
             /usr/bin/env DISPLAY="$bridge_display" \
                 XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/xprop -id "$window" WM_STATE 2>/dev/null || true
+                /usr/bin/xprop -id "$window" WM_STATE \
+                    _NET_WM_WINDOW_TYPE WM_TRANSIENT_FOR \
+                    2>/dev/null || true
         )"
         [[ "$state" == *'WM_STATE(WM_STATE)'* ]] || continue
+        # UU's exit confirmation is an opaque, screen-sized transient Wine
+        # window.  It is an overlay for the remote canvas, never a new scene.
+        # Selecting it here replaces the remote picture with its black fill.
+        [[ "$state" != *'_NET_WM_WINDOW_TYPE_DIALOG'* &&
+           "$state" != *'WM_TRANSIENT_FOR(WINDOW)'* ]] || continue
         geometry="$(
             /usr/bin/env DISPLAY="$bridge_display" \
                 XAUTHORITY="$bridge_xauthority" \
@@ -243,9 +250,13 @@ find_scene_window() {
         state="$(
             /usr/bin/env DISPLAY="$bridge_display" \
                 XAUTHORITY="$bridge_xauthority" \
-                /usr/bin/xprop -id "$window" WM_STATE 2>/dev/null || true
+                /usr/bin/xprop -id "$window" WM_STATE \
+                    _NET_WM_WINDOW_TYPE WM_TRANSIENT_FOR \
+                    2>/dev/null || true
         )"
         [[ "$state" == *'WM_STATE(WM_STATE)'* ]] || continue
+        [[ "$state" != *'_NET_WM_WINDOW_TYPE_DIALOG'* &&
+           "$state" != *'WM_TRANSIENT_FOR(WINDOW)'* ]] || continue
         geometry="$(
             /usr/bin/env DISPLAY="$bridge_display" \
                 XAUTHORITY="$bridge_xauthority" \
@@ -677,6 +688,7 @@ find_private_overlay() {
     local active="" active_class="" candidate=""
     local best="" best_score=-1 candidate_score=0 is_overlay=false
     local overlay_ewmh="" overlay_geometry="" overlay_state=""
+    local overlay_type=""
     local overlay_transient="" transient_target=0
     local overlay_x="" overlay_y="" overlay_width="" overlay_height=""
 
@@ -712,6 +724,9 @@ find_private_overlay() {
         overlay_ewmh="$(/usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
             -id "$candidate" _NET_WM_STATE 2>/dev/null || true)"
+        overlay_type="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
+            -id "$candidate" _NET_WM_WINDOW_TYPE 2>/dev/null || true)"
         overlay_transient="$(/usr/bin/env DISPLAY="$bridge_display" \
             XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
             -id "$candidate" WM_TRANSIENT_FOR 2>/dev/null || true)"
@@ -730,6 +745,17 @@ find_private_overlay() {
             if ((transient_target == scene)); then
                 is_overlay=true
                 candidate_score=$((candidate_score + 25000000))
+                # Prefer UU's full-screen exit confirmation over small
+                # statistics/control-centre surfaces.  The former must be
+                # identified deterministically so its false black backing
+                # surface can be clipped below.
+                if [[ "$overlay_type" == *'_NET_WM_WINDOW_TYPE_DIALOG'* &&
+                      "$overlay_ewmh" == *'_NET_WM_STATE_FULLSCREEN'* ]] &&
+                   ((overlay_x == scene_x && overlay_y == scene_y &&
+                     overlay_width == scene_width &&
+                     overlay_height == scene_height)); then
+                    candidate_score=$((candidate_score + 500000000))
+                fi
             fi
         fi
         [[ "$is_overlay" == true ]] || continue
@@ -743,6 +769,128 @@ find_private_overlay() {
             /usr/bin/xdotool search --class 'gameviewer.exe' 2>/dev/null || true
     )
     [[ -z "$best" ]] || printf '%s\n' "$best"
+}
+
+shape_fullscreen_dialog_overlay() {
+    local scene="$1" overlay="$2" scene_x="$3" scene_y="$4"
+    local scene_width="$5" scene_height="$6"
+    local geometry="" overlay_x="" overlay_y=""
+    local overlay_width="" overlay_height="" properties=""
+    local transient_target=0
+
+    [[ "$scene" =~ ^[1-9][0-9]*$ && "$overlay" =~ ^[1-9][0-9]*$ &&
+       "$scene" != "$overlay" && "$scene_x" =~ ^-?[0-9]+$ &&
+       "$scene_y" =~ ^-?[0-9]+$ && "$scene_width" =~ ^[1-9][0-9]*$ &&
+       "$scene_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    properties="$(/usr/bin/env DISPLAY="$bridge_display" \
+        XAUTHORITY="$bridge_xauthority" /usr/bin/xprop -id "$overlay" \
+        WM_STATE _NET_WM_WINDOW_TYPE _NET_WM_STATE WM_TRANSIENT_FOR \
+        2>/dev/null || true)"
+    [[ "$properties" == *'window state: Normal'* &&
+       "$properties" == *'_NET_WM_WINDOW_TYPE_DIALOG'* &&
+       "$properties" == *'_NET_WM_STATE_FULLSCREEN'* &&
+       "$properties" == *'WM_TRANSIENT_FOR(WINDOW)'* ]] || return 1
+    if [[ "$properties" =~ window[[:space:]]id[[:space:]]\#[[:space:]](0x[0-9a-fA-F]+|[0-9]+) ]]; then
+        transient_target=$((BASH_REMATCH[1]))
+        ((transient_target == scene)) || return 1
+    else
+        return 1
+    fi
+    geometry="$(private_window_geometry "$overlay" || true)"
+    overlay_x="$(/usr/bin/sed -n 's/^X=//p' <<<"$geometry")"
+    overlay_y="$(/usr/bin/sed -n 's/^Y=//p' <<<"$geometry")"
+    overlay_width="$(/usr/bin/sed -n 's/^WIDTH=//p' <<<"$geometry")"
+    overlay_height="$(/usr/bin/sed -n 's/^HEIGHT=//p' <<<"$geometry")"
+    [[ "$overlay_x" =~ ^-?[0-9]+$ && "$overlay_y" =~ ^-?[0-9]+$ &&
+       "$overlay_width" =~ ^[1-9][0-9]*$ &&
+       "$overlay_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    ((overlay_x == scene_x && overlay_y == scene_y &&
+      overlay_width == scene_width && overlay_height == scene_height)) ||
+        return 1
+
+    # UU 4.39 renders its 448x176 confirmation card into an otherwise
+    # opaque black, screen-sized DirectX dialog.  XShape removes only that
+    # false backing surface.  Apply the same rectangle to the input shape so
+    # invisible black pixels cannot swallow pointer events outside the card.
+    /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
+        /usr/bin/python3 - "$overlay" "$overlay_width" \
+            "$overlay_height" <<'PY'
+import ctypes
+import sys
+
+
+class Rectangle(ctypes.Structure):
+    _fields_ = [
+        ("x", ctypes.c_short),
+        ("y", ctypes.c_short),
+        ("width", ctypes.c_ushort),
+        ("height", ctypes.c_ushort),
+    ]
+
+
+window, surface_width, surface_height = map(int, sys.argv[1:])
+dialog_width = min(448, surface_width)
+dialog_height = min(176, surface_height)
+dialog_x = (surface_width - dialog_width) // 2
+dialog_y = (surface_height - dialog_height) // 2
+
+try:
+    x11 = ctypes.CDLL("libX11.so.6")
+    xext = ctypes.CDLL("libXext.so.6")
+except OSError:
+    raise SystemExit(2)
+
+x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+x11.XOpenDisplay.restype = ctypes.c_void_p
+x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+xext.XShapeQueryExtension.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+]
+xext.XShapeQueryExtension.restype = ctypes.c_int
+xext.XShapeCombineRectangles.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_ulong,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.POINTER(Rectangle),
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+]
+
+display = x11.XOpenDisplay(None)
+if not display:
+    raise SystemExit(3)
+event_base = ctypes.c_int()
+error_base = ctypes.c_int()
+if not xext.XShapeQueryExtension(
+    display, ctypes.byref(event_base), ctypes.byref(error_base)
+):
+    x11.XCloseDisplay(display)
+    raise SystemExit(4)
+
+rectangle = Rectangle(dialog_x, dialog_y, dialog_width, dialog_height)
+for shape_kind in (0, 2):  # ShapeBounding, ShapeInput
+    xext.XShapeCombineRectangles(
+        display,
+        window,
+        shape_kind,
+        0,
+        0,
+        ctypes.byref(rectangle),
+        1,
+        0,  # ShapeSet
+        0,  # Unsorted
+    )
+x11.XSync(display, 0)
+x11.XCloseDisplay(display)
+PY
+    trace_controller_timing \
+        "shaped fullscreen dialog overlay=$overlay ${overlay_width}x${overlay_height}"
 }
 
 request_presentation_mode() {
@@ -790,6 +938,7 @@ monitor_private_scene() {
     local viewer_ewmh_state=""
     local viewer_maximized=false
     local overlay_window=""
+    local shape_checked_overlay_window=""
     local capture_mode=""
     local capture_command=""
     local capture_updated=false
@@ -1032,6 +1181,20 @@ monitor_private_scene() {
         # opaque black placeholders and mid-session framebuffer resizes.
         overlay_window="$(find_private_overlay "$candidate" "$x" "$y" \
             "$width" "$height" || true)"
+        if [[ "$presentation_fullscreen" == true &&
+              -n "$overlay_window" &&
+              "$overlay_window" != "$shape_checked_overlay_window" ]]; then
+            shape_checked_overlay_window="$overlay_window"
+            if shape_fullscreen_dialog_overlay "$candidate" \
+                "$overlay_window" "$x" "$y" "$width" "$height"; then
+                /usr/bin/env DISPLAY="$bridge_display" \
+                    XAUTHORITY="$bridge_xauthority" /usr/bin/x11vnc \
+                    -env "X11VNC_REMOTE=$window_remote_channel" \
+                    -R refresh >/dev/null 2>&1 || true
+            fi
+        elif [[ -z "$overlay_window" ]]; then
+            shape_checked_overlay_window=""
+        fi
         capture_mode=id
         desired_capture="id:$candidate"
         if [[ "$presentation_fullscreen" == true ]]; then

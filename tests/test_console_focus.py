@@ -59,6 +59,13 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertIn('capture_mode=root-clip', SOURCE)
         self.assertIn('capture_command="script:clip:${width}x${height}+${x}+${y};refresh"', SOURCE)
         self.assertIn('find_private_overlay "$candidate"', SOURCE)
+        self.assertIn("shape_fullscreen_dialog_overlay()", SOURCE)
+        self.assertIn("XShapeCombineRectangles", SOURCE)
+        self.assertIn("for shape_kind in (0, 2)", SOURCE)
+        self.assertIn(
+            'shape_fullscreen_dialog_overlay "$candidate"', SOURCE
+        )
+        self.assertIn("'_NET_WM_WINDOW_TYPE_DIALOG'", SOURCE)
         self.assertIn('-R "$capture_command"', SOURCE)
         self.assertIn('-gone "$script_path release-client"', window)
         self.assertIn('>>"$state_dir/window-x11vnc.log" 2>&1 9>&- &', window)
@@ -200,6 +207,13 @@ discover_controller
                 result, _, _ = self.run_helpers("active_small", helper)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), "100")
+
+    def test_primary_scene_helpers_reject_transient_dialogs(self):
+        for helper in ("find_client_window", "find_scene_window"):
+            body = SOURCE.split(f"{helper}() {{", 1)[1].split("\n}\n", 1)[0]
+            with self.subTest(helper=helper):
+                self.assertIn("_NET_WM_WINDOW_TYPE_DIALOG", body)
+                self.assertIn("WM_TRANSIENT_FOR(WINDOW)", body)
 
     def test_detects_only_a_visible_remote_scene_as_active_session(self):
         result, _, _ = self.run_helpers(

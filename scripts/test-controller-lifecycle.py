@@ -4,6 +4,7 @@
 Exercises dragging, focus isolation, minimize/restore, transient iconification,
 viewport scaling, and inner-close cleanup using real Openbox and TigerVNC.
 """
+import ctypes
 import os
 from pathlib import Path
 import socket
@@ -29,6 +30,25 @@ def wait_for(description, predicate, timeout=12):
 def run(env, *args):
     return subprocess.run(args, env=env, capture_output=True, text=True,
                           timeout=5).stdout.strip()
+
+
+def set_transient_for(env, child, parent):
+    """Set the real ICCCM WINDOW property; xprop writes CARDINAL instead."""
+    x11 = ctypes.CDLL("libX11.so.6")
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XSetTransientForHint.argtypes = [
+        ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong
+    ]
+    x11.XSetTransientForHint.restype = ctypes.c_int
+    x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(env["DISPLAY"].encode())
+    assert display, "could not open fixture display"
+    status = x11.XSetTransientForHint(display, int(child), int(parent))
+    x11.XSync(display, 0)
+    x11.XCloseDisplay(display)
+    assert status != 0, "could not set fixture transient hint"
 
 
 def main():
@@ -536,6 +556,67 @@ def main():
                     "PASS bootstrap canvas reaches native resolution before "
                     "full-screen on "
                     f"first frame ({enter_elapsed:.2f}s)", flush=True)
+
+                # UU 4.39 implements its exit confirmation as a second,
+                # opaque black full-screen DirectX window with only a small
+                # confirmation card painted in the centre.  The controller
+                # must retain the remote canvas as its primary scene and
+                # shape that transient surface down to the visible card.
+                session_hex = f"0x{int(session_id):x}"
+                run(source, "wmctrl", "-ir", session_hex, "-b", "add,fullscreen")
+                wait_for("remote fixture did not become exactly full-screen", lambda: (
+                    root_geometry(source, session_id)["WIDTH"] == 1600 and
+                    root_geometry(source, session_id)["HEIGHT"] == 1000))
+                wait_for("controller missed exact full-screen source geometry", lambda: (
+                    controller_state().get("source_width") == "1600" and
+                    controller_state().get("source_height") == "1000"))
+                confirmation, confirmation_id = app(
+                    source, "Lifecycle exit confirmation", "448x176+576+412")
+                confirmation_hex = f"0x{int(confirmation_id):x}"
+                set_transient_for(source, confirmation_id, session_id)
+                run(source, "xprop", "-id", confirmation_id, "-f",
+                    "_NET_WM_WINDOW_TYPE", "32a", "-set",
+                    "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG")
+                run(source, "wmctrl", "-ir", confirmation_hex, "-b",
+                    "add,fullscreen")
+                run(source, "xdotool", "windowactivate", confirmation_id)
+
+                def confirmation_is_shaped():
+                    current = controller_state()
+                    shape = run(source, "xwininfo", "-id", confirmation_id,
+                                "-shape")
+                    return (
+                        current.get("candidate_window") == session_id and
+                        current.get("overlay_window") == confirmation_id and
+                        "Window shape extents:  448x176+576+412" in shape
+                    )
+
+                try:
+                    wait_for(
+                        "full-screen exit confirmation kept its black backing",
+                        confirmation_is_shaped,
+                    )
+                except AssertionError as error:
+                    raise AssertionError((
+                        str(error),
+                        "state=" + str(controller_state()),
+                        "windows=" + run(source, "wmctrl", "-lGx"),
+                        "properties=" + run(
+                            source, "xprop", "-id", confirmation_id,
+                            "WM_STATE", "_NET_WM_WINDOW_TYPE",
+                            "_NET_WM_STATE", "WM_TRANSIENT_FOR"),
+                        "shape=" + run(
+                            source, "xwininfo", "-id", confirmation_id,
+                            "-shape"),
+                    )) from error
+                print(
+                    "PASS exit confirmation preserves the remote picture "
+                    "behind its 448x176 card", flush=True)
+                confirmation.terminate()
+                confirmation.wait(timeout=3)
+                run(source, "xdotool", "windowactivate", session_id)
+                wait_for("closed confirmation remained the active overlay", lambda: (
+                    controller_state().get("overlay_window") != confirmation_id))
 
                 # Reproduce the real UU ordering: its remote window disappears
                 # first, the launcher becomes visible shortly afterwards.

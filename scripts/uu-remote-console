@@ -56,6 +56,12 @@ notify_error() {
     printf '%s\n' "$1" >&2
 }
 
+trace_controller_timing() {
+    [[ -d "$state_dir" ]] || /usr/bin/install -d -m 0700 "$state_dir"
+    printf '%s pid=%s %s\n' "${EPOCHREALTIME:-0}" "$BASHPID" "$*" \
+        >>"$state_dir/window-timing.log"
+}
+
 valid_port() {
     [[ "$1" =~ ^[1-9][0-9]{3,4}$ ]] &&
         ((10#$1 >= 1024 && 10#$1 <= 65535))
@@ -316,6 +322,81 @@ find_management_window() {
     return 1
 }
 
+find_remote_scene_candidate() {
+    local management="$1"
+    local active=""
+    local best="" best_score=-1 candidate_score=0 candidate=""
+    local geometry="" height="" width=""
+    local properties=""
+
+    active="$(/usr/bin/env DISPLAY="$bridge_display" \
+        XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+        getactivewindow 2>/dev/null || true)"
+    while read -r candidate; do
+        [[ "$candidate" =~ ^[1-9][0-9]*$ &&
+           "$candidate" != "$management" ]] || continue
+        properties="$(/usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xprop -id "$candidate" \
+            WM_STATE _NET_WM_WINDOW_TYPE WM_TRANSIENT_FOR \
+            2>/dev/null || true)"
+        [[ "$properties" == *'window state: Normal'* &&
+           "$properties" == *'_NET_WM_WINDOW_TYPE_NORMAL'* &&
+           "$properties" != *'WM_TRANSIENT_FOR(WINDOW)'* ]] || continue
+        geometry="$(private_window_geometry "$candidate" || true)"
+        width="$(/usr/bin/sed -n 's/^WIDTH=//p' <<<"$geometry")"
+        height="$(/usr/bin/sed -n 's/^HEIGHT=//p' <<<"$geometry")"
+        [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || continue
+        ((width >= 400 && height >= 300)) || continue
+        candidate_score=$((width * height))
+        if [[ "$candidate" == "$active" ]]; then
+            candidate_score=$((candidate_score + 100000000))
+        fi
+        if ((candidate_score > best_score)); then
+            best="$candidate"
+            best_score="$candidate_score"
+        fi
+    done < <(
+        /usr/bin/env DISPLAY="$bridge_display" \
+            XAUTHORITY="$bridge_xauthority" /usr/bin/xdotool \
+            search --class 'gameviewer.exe' \
+            2>/dev/null || true
+    )
+    [[ -z "$best" ]] || printf '%s\n' "$best"
+}
+
+maximize_private_remote_scene() {
+    local window="$1" screen_width="$2" screen_height="$3"
+    local geometry="" width="" height=""
+    local minimum_width=0 minimum_height=0
+
+    [[ "$window" =~ ^[1-9][0-9]*$ &&
+       "$screen_width" =~ ^[1-9][0-9]*$ &&
+       "$screen_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    minimum_width=$((screen_width > 64 ? screen_width - 64 : screen_width))
+    minimum_height=$((screen_height > 64 ? screen_height - 64 : screen_height))
+    /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
+        /usr/bin/wmctrl -ir "$(printf '0x%x' "$window")" -b \
+        add,maximized_vert,maximized_horz >/dev/null 2>&1 || return 1
+    /usr/bin/env DISPLAY="$bridge_display" XAUTHORITY="$bridge_xauthority" \
+        /usr/bin/xdotool windowmap "$window" windowactivate "$window" \
+        >/dev/null 2>&1 || true
+    for _ in {1..10}; do
+        geometry="$(private_window_geometry "$window" || true)"
+        width="$(/usr/bin/sed -n 's/^WIDTH=//p' <<<"$geometry")"
+        height="$(/usr/bin/sed -n 's/^HEIGHT=//p' <<<"$geometry")"
+        if [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] &&
+           ((width >= minimum_width && height >= minimum_height)); then
+            trace_controller_timing \
+                "remote scene maximized window=$window ${width}x${height}"
+            return 0
+        fi
+        sleep 0.02
+    done
+    trace_controller_timing \
+        "remote scene maximize incomplete window=$window ${width:-0}x${height:-0}"
+    return 1
+}
+
 controller_remote_session_active() {
     local management=""
     local scene=""
@@ -504,27 +585,44 @@ cleanup_server() {
 }
 
 cleanup_window() {
+    trace_controller_timing 'cleanup begin'
     trap - EXIT INT TERM HUP
     stop_window_child "$window_monitor_pid"
     stop_window_child "$window_vnc_pid"
     release_client || true
     rm -f "$runtime_dir/window.port" "$controller_state_file" \
         "$presentation_request_file"
+    trace_controller_timing 'cleanup end'
 }
 
 stop_window_child() {
     local pid="$1"
+    local process_state=""
+    local stat_line=""
 
     [[ -n "$pid" ]] || return 0
+    trace_controller_timing "stop child begin pid=$pid"
     kill "$pid" >/dev/null 2>&1 || true
     for _ in {1..20}; do
         kill -0 "$pid" >/dev/null 2>&1 || break
+        # A completed background job remains visible to kill -0 as a zombie
+        # until this parent calls wait. Treat it as stopped immediately;
+        # otherwise every presentation handoff pays the full two-second
+        # timeout even though both the monitor and transport already exited.
+        if [[ -r "/proc/$pid/stat" ]]; then
+            IFS= read -r stat_line <"/proc/$pid/stat" || stat_line=""
+            process_state="${stat_line##*) }"
+            process_state="${process_state%% *}"
+            [[ "$process_state" == Z || "$process_state" == X ]] && break
+        fi
         sleep 0.1
     done
-    if kill -0 "$pid" >/dev/null 2>&1; then
+    if kill -0 "$pid" >/dev/null 2>&1 &&
+       [[ "$process_state" != Z && "$process_state" != X ]]; then
         kill -KILL "$pid" >/dev/null 2>&1 || true
     fi
     wait "$pid" 2>/dev/null || true
+    trace_controller_timing "stop child end pid=$pid state=${process_state:-gone}"
 }
 
 publish_controller_state() {
@@ -656,14 +754,20 @@ request_presentation_mode() {
     printf '%s\n' "$requested" >"$temporary"
     chmod 0600 "$temporary"
     mv -f "$temporary" "$presentation_request_file"
-    # Disconnect the local transport only after the request is durable. The
-    # parent re-execs this controller against the new UU scene immediately.
-    kill "$window_vnc_pid" >/dev/null 2>&1 || true
+    trace_controller_timing "presentation request $presentation_mode->$requested"
+    # Disconnect the local transport only after the request is durable. This
+    # x11vnc instance is loopback-only and disposable: its normal TERM path
+    # can spend roughly two seconds draining a framebuffer that is already
+    # obsolete. Kill only this per-viewer transport immediately so the parent
+    # can re-exec against the new UU scene without showing that dead interval.
+    # cleanup_window still performs the normal focus and state cleanup.
+    kill -KILL "$window_vnc_pid" >/dev/null 2>&1 || true
 }
 
 monitor_private_scene() {
     local initial_capture="${5:-id:$1}"
     local selected_capture="$initial_capture"
+    local selected_scale="${6:-1.000000}"
     local presentation_width="${2:-0}"
     local presentation_height="${3:-0}"
     local presentation_mode="${4:-windowed}"
@@ -693,7 +797,7 @@ monitor_private_scene() {
     local iconic_candidate=""
     local iconic_checks=0
     local missing_checks=0
-    local selected_scale="1.000000"
+    local fast_remote=""
     local scale=""
     local width=0
     local x=0
@@ -725,8 +829,26 @@ monitor_private_scene() {
     fi
     publish_controller_state "$state_generation" starting "$1" \
         "$active_capture_mode" "$1" 0 \
-        0 0 0 0 1.000000 0 false false
+        0 0 0 0 "$selected_scale" 0 false false
     while kill -0 "$window_vnc_pid" >/dev/null 2>&1; do
+        if [[ "$presentation_fullscreen" == false &&
+              "$controller_fullscreen" == auto &&
+              -n "$management_window" ]]; then
+            fast_remote="$(find_remote_scene_candidate \
+                "$management_window" || true)"
+            if [[ -n "$fast_remote" ]]; then
+                # The 640x360 surface is UU's bootstrap canvas, not the final
+                # remote resolution. Maximize it inside the private display
+                # before rebuilding the local full-screen shell so the first
+                # transmitted framebuffer is already the real 1920x1080
+                # canvas rather than a blurry 3x enlargement.
+                if maximize_private_remote_scene "$fast_remote" \
+                    "$screen_width" "$screen_height"; then
+                    request_presentation_mode fullscreen
+                    return 0
+                fi
+            fi
+        fi
         candidate="$(find_scene_window --known-display | /usr/bin/tail -n 1)"
         if [[ "$presentation_fullscreen" == false && -z "$viewer_window" ]]; then
             viewer_window="$(find_local_viewer_window || true)"
@@ -866,9 +988,16 @@ monitor_private_scene() {
             fi
         fi
         source_fullscreen=false
-        if [[ "$source_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ||
-              ( "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
-                "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ) ]]; then
+        if [[ "$source_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ]]; then
+            source_fullscreen=true
+        elif [[ "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
+                "$source_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* &&
+                "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] &&
+             ((screen_width > 0 && screen_height > 0 &&
+               width >= screen_width - 64 &&
+               height >= screen_height - 64)); then
+            # Do not mistake a 640x360 bootstrap canvas for a usable remote
+            # framebuffer merely because the WM has acknowledged maximize.
             source_fullscreen=true
         fi
         # Some UU/Wine windows drop the EWMH fullscreen flag while retaining
@@ -1399,6 +1528,7 @@ open_window() {
     local client_ewmh_state=""
     local client_height=680
     local client_source_fullscreen=false
+    local client_source_toplevel=false
     local client_width=920
     local client_x=0
     local client_y=0
@@ -1407,7 +1537,9 @@ open_window() {
     local frame_left=0
     local frame_top=0
     local initial_capture_signature=""
+    local initial_scale="1.000000"
     local management_window=""
+    local maximized_geometry=""
     local presentation_mode=windowed
     local private_screen=""
     local private_screen_width=0
@@ -1419,6 +1551,8 @@ open_window() {
     local viewer_status=0
     local window_port=""
     local -a x11vnc_capture_args=()
+
+    trace_controller_timing 'open begin'
 
     if [[ -z "${DISPLAY:-}" ]]; then
         notify_error 'Open UU Remote from a logged-in graphical desktop.'
@@ -1447,6 +1581,7 @@ open_window() {
             return 1
         fi
     fi
+    trace_controller_timing 'window lock acquired'
     rm -f "$presentation_request_file"
     if ! ensure_bridge; then
         notify_error 'The Ubuntu desktop bridge could not start.'
@@ -1466,6 +1601,7 @@ open_window() {
         notify_error 'The UU management window did not become ready.'
         return 1
     fi
+    trace_controller_timing "scene selected window=$client_window"
     client_geometry="$(private_window_geometry "$client_window" || true)"
     if [[ "$client_geometry" == *$'\nWIDTH='* &&
           "$client_geometry" == *$'\nHEIGHT='* ]]; then
@@ -1535,16 +1671,39 @@ open_window() {
     fi
     client_ewmh_state="$(/usr/bin/env DISPLAY="$bridge_display" \
         XAUTHORITY="$bridge_xauthority" /usr/bin/xprop \
-        -id "$client_window" _NET_WM_STATE 2>/dev/null || true)"
-    if [[ "$client_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ||
-          ( "$client_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
-            "$client_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ) ]] ||
+        -id "$client_window" _NET_WM_STATE _NET_WM_WINDOW_TYPE \
+        WM_TRANSIENT_FOR 2>/dev/null || true)"
+    if [[ "$client_ewmh_state" == *'_NET_WM_WINDOW_TYPE_NORMAL'* &&
+          "$client_ewmh_state" != *'WM_TRANSIENT_FOR(WINDOW)'* ]]; then
+        client_source_toplevel=true
+    fi
+    if [[ "$client_ewmh_state" == *'_NET_WM_STATE_FULLSCREEN'* ]] ||
+       { [[ "$client_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_VERT'* &&
+            "$client_ewmh_state" == *'_NET_WM_STATE_MAXIMIZED_HORZ'* ]] &&
+         ((private_screen_width > 0 && private_screen_height > 0 &&
+           client_width >= private_screen_width - 64 &&
+           client_height >= private_screen_height - 64)); } ||
        ((private_screen_width > 0 && private_screen_height > 0 &&
          client_width == private_screen_width &&
          client_height == private_screen_height)); then
         client_source_fullscreen=true
     fi
     management_window="$(find_management_window --known-display || true)"
+    if [[ "$controller_fullscreen" != off &&
+          -n "$management_window" && "$client_window" != "$management_window" &&
+          "$client_source_toplevel" == true ]]; then
+        if maximize_private_remote_scene "$client_window" \
+            "$private_screen_width" "$private_screen_height"; then
+            maximized_geometry="$(private_window_geometry "$client_window" || true)"
+            client_x="$(/usr/bin/sed -n 's/^X=//p' <<<"$maximized_geometry")"
+            client_y="$(/usr/bin/sed -n 's/^Y=//p' <<<"$maximized_geometry")"
+            client_width="$(/usr/bin/sed -n 's/^WIDTH=//p' \
+                <<<"$maximized_geometry")"
+            client_height="$(/usr/bin/sed -n 's/^HEIGHT=//p' \
+                <<<"$maximized_geometry")"
+            client_source_fullscreen=true
+        fi
+    fi
     presentation_mode="$(presentation_mode_for_scene \
         "$client_window" "$management_window" "$client_width" \
         "$client_height" "$client_source_fullscreen")"
@@ -1579,6 +1738,18 @@ open_window() {
     ); then
         [[ "$presentation_width" =~ ^[1-9][0-9]*$ ]] || presentation_width=0
         [[ "$presentation_height" =~ ^[1-9][0-9]*$ ]] || presentation_height=0
+    fi
+    if [[ "$presentation_mode" == fullscreen &&
+          "$presentation_width" =~ ^[1-9][0-9]*$ &&
+          "$presentation_height" =~ ^[1-9][0-9]*$ ]]; then
+        initial_scale="$(fit_scale "$client_width" "$client_height" \
+            "$presentation_width" "$presentation_height" || true)"
+        [[ "$initial_scale" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+            initial_scale=1.000000
+        if [[ "$initial_scale" != 1 && "$initial_scale" != 1.0 &&
+              "$initial_scale" != 1.000000 ]]; then
+            x11vnc_capture_args+=(-scale "$initial_scale")
+        fi
     fi
 
     # A draggable management window uses direct X-window capture. A stable
@@ -1617,8 +1788,9 @@ open_window() {
         -desktop 'UU Remote' \
         -gone "$script_path release-client" \
         -quiet \
-        >>"$state_dir/window-x11vnc.log" 2>&1 &
+        >>"$state_dir/window-x11vnc.log" 2>&1 9>&- &
     window_vnc_pid=$!
+    trace_controller_timing "x11vnc spawned pid=$window_vnc_pid mode=$presentation_mode"
 
     for _ in {1..80}; do
         if listener_present "$window_port" &&
@@ -1633,13 +1805,17 @@ open_window() {
         notify_error 'The UU management window could not be exposed locally.'
         return 1
     fi
+    trace_controller_timing 'x11vnc listener ready'
 
     monitor_private_scene "$client_window" \
         "$presentation_width" "$presentation_height" \
-        "$presentation_mode" "$initial_capture_signature" &
+        "$presentation_mode" "$initial_capture_signature" \
+        "$initial_scale" 9>&- &
     window_monitor_pid=$!
+    trace_controller_timing "monitor spawned pid=$window_monitor_pid"
 
     set +e
+    trace_controller_timing "viewer start mode=$presentation_mode"
     /usr/bin/vncviewer \
         -geometry "${client_width}x${client_height}" \
         -FullScreen="$controller_fullscreen_value" \
@@ -1659,8 +1835,9 @@ open_window() {
         -AlertOnFatalError=0 \
         -SecurityTypes=None \
         "127.0.0.1::$window_port" \
-        >>"$state_dir/window-viewer.log" 2>&1
+        >>"$state_dir/window-viewer.log" 2>&1 9>&-
     viewer_status=$?
+    trace_controller_timing "viewer exit status=$viewer_status"
     set -e
     if [[ -r "$presentation_request_file" ]]; then
         read -r requested_presentation <"$presentation_request_file" ||
@@ -1696,6 +1873,7 @@ open_window() {
             >>"$state_dir/window-viewer.log"
         cleanup_window
         exec 9>&-
+        trace_controller_timing "reexec mode=$requested_presentation"
         exec "$script_path" window
     fi
     if [[ "$presentation_mode" == fullscreen ]] &&

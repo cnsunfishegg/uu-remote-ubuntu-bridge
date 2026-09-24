@@ -490,21 +490,56 @@ def main():
                 assert geometry(desktop, viewer.splitlines()[-1])["HEIGHT"] == 680
                 print("PASS automatic device list is one borderless 920x680 window", flush=True)
 
-                session, session_id = app(source, "Lifecycle remote canvas", "1536x904+0+0")
+                enter_started = time.monotonic()
+                session, session_id = app(source, "Lifecycle remote canvas", "640x360+0+0")
+                run(source, "xprop", "-id", session_id, "-f",
+                    "_NET_WM_WINDOW_TYPE", "32a", "-set",
+                    "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL")
                 run(source, "xdotool", "windowminimize", manager_id)
                 run(source, "xdotool", "windowactivate", session_id)
-                wait_for("remote canvas did not recreate a full-screen viewer", lambda: (
-                    active_controller_state("fullscreen", session_id)), timeout=20)
+                try:
+                    wait_for(
+                        "remote canvas did not recreate a full-screen viewer",
+                        lambda: active_controller_state("fullscreen", session_id),
+                        timeout=20,
+                    )
+                except AssertionError as error:
+                    raise AssertionError((
+                        str(error),
+                        "active=" + run(source, "xdotool", "getactivewindow"),
+                        "windows=" + run(source, "wmctrl", "-lGx"),
+                        "properties=" + run(
+                            source,
+                            "xprop",
+                            "-id",
+                            session_id,
+                            "WM_STATE",
+                            "_NET_WM_WINDOW_TYPE",
+                            "WM_TRANSIENT_FOR",
+                        ),
+                        "geometry=" + str(root_geometry(source, session_id)),
+                        "state=" + str(controller_state()),
+                    )) from error
                 current = controller_state()
-                assert current.get("source_width") == "1536", current
-                assert current.get("source_height") == "904", current
+                remote_geometry = root_geometry(source, session_id)
+                assert remote_geometry["WIDTH"] == 1600, remote_geometry
+                # A decorated test window uses 21 vertical pixels for its
+                # Openbox frame. Real UU is borderless and reaches 1920x1080.
+                assert remote_geometry["HEIGHT"] >= 936, remote_geometry
+                assert current.get("source_width") == "1600", current
+                assert int(current.get("source_height", "0")) >= 936, current
                 assert current.get("viewer_maximized") == "true", current
-                assert current.get("scale") == "1.041666", current
+                assert current.get("scale") == "1.000000", current
                 assert current.get("capture_mode") == "root-clip", current
-                print("PASS entering remote control is full-screen and scaled on first frame", flush=True)
+                enter_elapsed = time.monotonic() - enter_started
+                print(
+                    "PASS bootstrap canvas reaches native resolution before "
+                    "full-screen on "
+                    f"first frame ({enter_elapsed:.2f}s)", flush=True)
 
                 # Reproduce the real UU ordering: its remote window disappears
                 # first, the launcher becomes visible shortly afterwards.
+                exit_started = time.monotonic()
                 session.terminate()
                 session.wait(timeout=3)
                 time.sleep(0.4)
@@ -519,14 +554,21 @@ def main():
                         desktop, "xprop", "-id", viewer.splitlines()[-1],
                         "_NET_FRAME_EXTENTS")))
                 assert console.poll() is None, "automatic controller exited instead of returning"
-                print("PASS remote exit automatically returns to the device list without F8", flush=True)
+                exit_elapsed = time.monotonic() - exit_started
+                print(
+                    "PASS remote exit automatically returns to the device list "
+                    f"without F8 ({exit_elapsed:.2f}s)", flush=True)
 
                 run(source, "xdotool", "windowunmap", manager_id)
                 wait_for("automatic controller did not close with its launcher", lambda: (
                     console.poll() is not None))
                 host_unchanged()
             except Exception:
-                for name in ("window-x11vnc.log", "window-viewer.log"):
+                for name in (
+                    "window-x11vnc.log",
+                    "window-viewer.log",
+                    "window-timing.log",
+                ):
                     path = root / "state/uu-remote-console" / name
                     if path.exists():
                         print(path.read_text(errors="replace")[-3000:])

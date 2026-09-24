@@ -482,7 +482,10 @@ class RuntimeScriptTests(unittest.TestCase):
         self.assertIn('-id "$client_window"', console)
         self.assertIn('monitor_private_scene "$client_window" \\', console)
         self.assertIn('"$presentation_width" "$presentation_height" \\', console)
-        self.assertIn('"$presentation_mode" "$initial_capture_signature" &', console)
+        self.assertIn(
+            '"$presentation_mode" "$initial_capture_signature" \\', console
+        )
+        self.assertIn('"$initial_scale" 9>&- &', console)
         self.assertIn('-geometry "${client_width}x${client_height}"', console)
         self.assertNotIn('-clip "$initial_clip"', console)
         self.assertIn('desired_capture="id:$candidate"', console)

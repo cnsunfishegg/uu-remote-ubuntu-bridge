@@ -42,7 +42,14 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertIn('-xwarppointer', window)
         self.assertIn('monitor_private_scene "$client_window" \\', window)
         self.assertIn('"$presentation_width" "$presentation_height" \\', window)
-        self.assertIn('"$presentation_mode" "$initial_capture_signature" &', window)
+        self.assertIn(
+            '"$presentation_mode" "$initial_capture_signature" \\', window
+        )
+        self.assertIn('"$initial_scale" 9>&- &', window)
+        self.assertIn('find_remote_scene_candidate()', SOURCE)
+        self.assertIn('maximize_private_remote_scene()', SOURCE)
+        self.assertIn('if maximize_private_remote_scene "$fast_remote"', SOURCE)
+        self.assertIn('x11vnc_capture_args+=(-scale "$initial_scale")', window)
         self.assertIn('initial_capture_signature="root-clip:$client_window:', window)
         self.assertIn('-clip "${client_width}x${client_height}+${client_x}+${client_y}"', window)
         self.assertIn('X11VNC_REMOTE=$window_remote_channel', window)
@@ -54,6 +61,8 @@ class ConsoleFocusTests(unittest.TestCase):
         self.assertIn('find_private_overlay "$candidate"', SOURCE)
         self.assertIn('-R "$capture_command"', SOURCE)
         self.assertIn('-gone "$script_path release-client"', window)
+        self.assertIn('>>"$state_dir/window-x11vnc.log" 2>&1 9>&- &', window)
+        self.assertIn('>>"$state_dir/window-viewer.log" 2>&1 9>&-', window)
         self.assertIn('stop_window_child "$window_vnc_pid"', SOURCE)
         self.assertIn('publish_controller_state "$state_generation" ready', SOURCE)
         self.assertIn(
@@ -217,6 +226,10 @@ discover_controller
             ("presentation_mode_for_scene 100 100 1920 1080 true", "windowed"),
             ("presentation_mode_for_scene 200 100 1920 1080 true", "fullscreen"),
             ("presentation_mode_for_scene 200 100 1536 904 false", "fullscreen"),
+            # A small UU bootstrap canvas must never be enlarged as if it
+            # were the final desktop. The monitor first maximizes the real
+            # private window; only that screen-sized canvas goes full-screen.
+            ("presentation_mode_for_scene 200 100 640 360 false", "windowed"),
             ("presentation_mode_for_scene 300 100 700 500 false", "windowed"),
         )
         for command, expected in cases:
@@ -238,6 +251,13 @@ if kill -0 "$stuck" 2>/dev/null; then exit 1; fi
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(time.monotonic() - started, 4)
+
+    def test_completed_window_child_is_reaped_without_full_timeout(self):
+        self.assertIn('process_state="${stat_line##*) }"', SOURCE)
+        self.assertIn(
+            '[[ "$process_state" == Z || "$process_state" == X ]] && break',
+            SOURCE,
+        )
 
     def test_private_client_does_not_inherit_outer_window_lock(self):
         with tempfile.TemporaryDirectory(prefix="uu-lock-inheritance-") as temp:

@@ -510,6 +510,71 @@ def main():
                 assert geometry(desktop, viewer.splitlines()[-1])["HEIGHT"] == 680
                 print("PASS automatic device list is one borderless 920x680 window", flush=True)
 
+                auto_viewer = viewer.splitlines()[-1]
+                auto_outer_before = geometry(desktop, auto_viewer)
+                auto_inner_before = root_geometry(source, manager_id)
+                run(
+                    desktop,
+                    "xdotool",
+                    "windowactivate",
+                    auto_viewer,
+                    "mousemove",
+                    "--window",
+                    auto_viewer,
+                    "300",
+                    "35",
+                    "mousedown",
+                    "1",
+                    "sleep",
+                    "0.2",
+                    "mousemove_relative",
+                    "--sync",
+                    "120",
+                    "80",
+                    "sleep",
+                    "0.2",
+                    "mouseup",
+                    "1",
+                )
+                wait_for(
+                    "UU titlebar did not drag the borderless device window",
+                    lambda: (
+                        geometry(desktop, auto_viewer)["X"] ==
+                        auto_outer_before["X"] + 120 and
+                        geometry(desktop, auto_viewer)["Y"] ==
+                        auto_outer_before["Y"] + 80
+                    ),
+                )
+                assert root_geometry(source, manager_id) == auto_inner_before, (
+                    "UU titlebar drag moved the private source window",
+                    root_geometry(source, manager_id),
+                )
+                manager_events_before = (root / "process.log").read_text(
+                    errors="replace"
+                ).count("ButtonPress event")
+                run(
+                    desktop,
+                    "xdotool",
+                    "mousemove",
+                    "--window",
+                    auto_viewer,
+                    "700",
+                    "35",
+                    "click",
+                    "1",
+                )
+                wait_for(
+                    "titlebar control side no longer forwards UU input",
+                    lambda: (root / "process.log").read_text(
+                        errors="replace"
+                    ).count("ButtonPress event") > manager_events_before,
+                )
+                print(
+                    "PASS UU titlebar moves only the borderless shell and "
+                    "leaves its controls live",
+                    flush=True,
+                )
+
                 enter_started = time.monotonic()
                 session, session_id = app(source, "Lifecycle remote canvas", "640x360+0+0")
                 run(source, "xprop", "-id", session_id, "-f",

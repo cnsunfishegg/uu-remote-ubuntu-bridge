@@ -89,6 +89,19 @@ class ConsoleFocusTests(unittest.TestCase):
         )
         self.assertIn('sleep 0.02', SOURCE)
         self.assertIn('stop_window_child "$window_focus_pid"', SOURCE)
+        self.assertIn('stop_window_child "$window_drag_pid"', SOURCE)
+        self.assertIn("enable_local_viewer_drag_when_mapped()", SOURCE)
+        self.assertIn(
+            'enable_local_viewer_drag_when_mapped "$presentation_mode"',
+            window,
+        )
+        self.assertIn(
+            '[[ "$controller_fullscreen" == auto && "$mode" == windowed ]]',
+            SOURCE,
+        )
+        self.assertIn("InputOnly = 2", SOURCE)
+        self.assertIn("ButtonMotionMask = 1 << 13", SOURCE)
+        self.assertIn("x11.XMoveWindow(", SOURCE)
         self.assertIn('if [[ -z "$viewer_window" ]]', SOURCE)
         self.assertNotIn(
             'if [[ "$presentation_fullscreen" == false && -z "$viewer_window" ]]',
